@@ -1,0 +1,12 @@
+{
+  "Author": "makuragami",
+  "Name": "MissFisher ICE Scheduler",
+  "InternalName": "MissFisherIceScheduler",
+  "Punchline": "在 MissFisher 钓鱼间隙运行 ICE。",
+  "Description": "MissFisher 距离下一目标窗口较远时暂停钓鱼并启动 ICE，在恢复预留时间到达后停止 ICE、切回捕鱼人并恢复所选目标。",
+  "ApplicableVersion": "any",
+  "DalamudApiLevel": 15,
+  "LoadRequiredState": 0,
+  "LoadSync": false,
+  "CanUnloadAsync": false
+}
