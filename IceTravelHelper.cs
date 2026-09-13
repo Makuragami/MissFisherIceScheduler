@@ -47,6 +47,7 @@ internal sealed class IceTravelHelper
     private uint entranceTerritoryId;
     private DateTime nextActionUtc;
     private DateTime nextNpcScanLogUtc;
+    private DateTime entranceSelectionUtc;
     private bool moveRequested;
 
     public IceTravelHelper(IDalamudPluginInterface pi, IClientState clientState, ICondition condition,
@@ -72,6 +73,7 @@ internal sealed class IceTravelHelper
         entranceTerritoryId = 0;
         nextActionUtc = DateTime.MinValue;
         nextNpcScanLogUtc = DateTime.MinValue;
+        entranceSelectionUtc = DateTime.MinValue;
         moveRequested = false;
     }
 
@@ -80,8 +82,14 @@ internal sealed class IceTravelHelper
         error = null;
         try
         {
-            if (IsIceTerritory(clientState.TerritoryType))
+            if (clientState.TerritoryType == config.IceTerritoryId)
                 return true;
+
+            if (IsIceTerritory(clientState.TerritoryType))
+            {
+                error = $"进入了错误的 ICE 区域 {clientState.TerritoryType}，目标为 {config.IceTerritoryId}";
+                return false;
+            }
 
             return phase switch
             {
@@ -245,10 +253,36 @@ internal sealed class IceTravelHelper
 
         nextActionUtc = now.AddMilliseconds(700);
 
-        if (TryAdvanceTalk() || TrySelectString(config.IceEntranceOptionIndex) || TryConfirmYes())
+        if (TryAdvanceTalk())
         {
             Status = "正在处理前往宇宙探索区域的对话";
             return false;
+        }
+
+        if (TrySelectString(config.IceTerritoryId, out var selectedIndex))
+        {
+            entranceSelectionUtc = now;
+            Status = $"已选择 Auxesia 入口（第 {selectedIndex + 1} 项），等待换区";
+            log.Information("Built-in ICE travel: selected entrance option index={Index}, targetTerritory={Territory}",
+                selectedIndex, config.IceTerritoryId);
+            return false;
+        }
+
+        if (TryConfirmYes())
+        {
+            Status = "正在确认进入 Auxesia";
+            return false;
+        }
+
+        if (entranceSelectionUtc != DateTime.MinValue)
+        {
+            if (now - entranceSelectionUtc < TimeSpan.FromSeconds(20))
+            {
+                Status = "已选择 Auxesia，等待区域切换";
+                return false;
+            }
+            entranceSelectionUtc = DateTime.MinValue;
+            log.Warning("Built-in ICE travel: entrance selection did not change territory; retrying NPC interaction");
         }
 
         var player = objects.LocalPlayer;
@@ -302,15 +336,24 @@ internal sealed class IceTravelHelper
         return true;
     }
 
-    private unsafe bool TrySelectString(int index)
+    private unsafe bool TrySelectString(uint targetTerritoryId, out int selectedIndex)
     {
+        selectedIndex = targetTerritoryId switch
+        {
+            1237 => 0,
+            1291 => 1,
+            1310 => 2,
+            1319 => 3,
+            _ => 3,
+        };
         var addon = (AddonSelectString*)gameGui.GetAddonByName("SelectString", 1).Address;
         if (addon is null || !addon->AtkUnitBase.IsVisible || !addon->AtkUnitBase.IsReady)
             return false;
         var count = addon->PopupMenu.PopupMenu.EntryCount;
         if (count <= 0)
             return false;
-        addon->FireCallbackInt(Math.Clamp(index, 0, count - 1));
+        selectedIndex = Math.Clamp(selectedIndex, 0, count - 1);
+        addon->FireCallbackInt(selectedIndex);
         return true;
     }
 

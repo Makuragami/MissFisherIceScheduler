@@ -150,7 +150,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void TickTravelling(DateTime now)
     {
-        if (IceTravelHelper.IsIceTerritory(clientState.TerritoryType))
+        if (clientState.TerritoryType == config.IceTerritoryId)
         {
             Transition(SchedulerState.EquippingIceJob, "已进入目标宇宙探索区域，准备切换 ICE 职业");
             return;
@@ -483,9 +483,7 @@ public sealed class Plugin : IDalamudPlugin
         if (builtInTravel)
         {
             ImGui.TextWrapped("自动传送到最佳兔威洞，使用 vnavmesh 前往驾行威并确认进入。无需快捷传送面板。");
-            var optionIndex = config.IceEntranceOptionIndex;
-            if (ImGui.InputInt("入口对话选项序号（从 0 开始）", ref optionIndex))
-            { config.IceEntranceOptionIndex = Math.Clamp(optionIndex, 0, 10); Save(); }
+            ImGui.TextWrapped("入口菜单会根据 ICE 目标区域自动选择；Auxesia 对应第 4 项。");
         }
         else
         {
