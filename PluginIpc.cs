@@ -20,6 +20,10 @@ internal sealed class PluginIpc
     private readonly ICallGateSubscriber<object> iceEnable;
     private readonly ICallGateSubscriber<object> iceDisable;
     private readonly ICallGateSubscriber<string, bool, object> iceChangeSetting;
+    private readonly ICallGateSubscriber<bool> artisanBusy;
+    private readonly ICallGateSubscriber<bool> artisanStopRequest;
+    private readonly ICallGateSubscriber<bool, object> artisanSetStopRequest;
+    private readonly ICallGateSubscriber<bool, object> artisanSetEndurance;
     private DateTime nextWarningUtc;
 
     public PluginIpc(IDalamudPluginInterface pi, IPluginLog log)
@@ -38,6 +42,10 @@ internal sealed class PluginIpc
         iceEnable = pi.GetIpcSubscriber<object>("ICE.Enable");
         iceDisable = pi.GetIpcSubscriber<object>("ICE.Disable");
         iceChangeSetting = pi.GetIpcSubscriber<string, bool, object>("ICE.ChangeSetting");
+        artisanBusy = pi.GetIpcSubscriber<bool>("Artisan.IsBusy");
+        artisanStopRequest = pi.GetIpcSubscriber<bool>("Artisan.GetStopRequest");
+        artisanSetStopRequest = pi.GetIpcSubscriber<bool, object>("Artisan.SetStopRequest");
+        artisanSetEndurance = pi.GetIpcSubscriber<bool, object>("Artisan.SetEnduranceStatus");
     }
 
     public bool TryGetFisher(out MissFisherSnapshot value)
@@ -75,6 +83,35 @@ internal sealed class PluginIpc
         catch (Exception ex) { log.Error(ex, "ICE ChangeSetting IPC failed"); return false; }
     }
 
+    public bool TryGetArtisan(out ArtisanSnapshot value)
+    {
+        try
+        {
+            value = new(artisanBusy.InvokeFunc(), artisanStopRequest.InvokeFunc());
+            return true;
+        }
+        catch (Exception ex) { Warn(ex, "Artisan IPC unavailable"); value = default; return false; }
+    }
+
+    public bool TryStopArtisan()
+    {
+        try { artisanSetStopRequest.InvokeAction(true); return true; }
+        catch (Exception ex) { log.Error(ex, "Artisan stop IPC failed"); return false; }
+    }
+
+    public bool TryPrepareArtisanForIce()
+    {
+        try
+        {
+            // Clearing the stop request may resume Artisan's old Endurance mode.
+            // Disable it immediately; ICE will enable it with the new recipe.
+            artisanSetStopRequest.InvokeAction(false);
+            artisanSetEndurance.InvokeAction(false);
+            return true;
+        }
+        catch (Exception ex) { log.Error(ex, "Artisan prepare IPC failed"); return false; }
+    }
+
     private void Warn(Exception ex, string message)
     {
         if (DateTime.UtcNow < nextWarningUtc) return;
@@ -86,3 +123,4 @@ internal sealed class PluginIpc
 internal readonly record struct MissFisherSnapshot(bool IsRunning, bool IsWindowActive, bool IsPaused,
     bool IsWaiting, bool IsAutoPreparing, bool IsInWindow, double SecondsUntilNextWindow);
 internal readonly record struct IceSnapshot(bool IsRunning, string State, uint CurrentMission);
+internal readonly record struct ArtisanSnapshot(bool IsBusy, bool StopRequested);

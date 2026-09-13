@@ -60,6 +60,10 @@ public sealed class Plugin : IDalamudPlugin
     private readonly HashSet<uint> failedIceJobsThisCycle = [];
     private bool rotatingIceJob;
     private bool iceStopAfterCurrentOwned;
+    private bool artisanStopRequestOwned;
+    private DateTime nextIceStopRetryUtc;
+    private DateTime? stopConfirmedSinceUtc;
+    private bool stopTimeoutLogged;
 
     public Plugin(IDalamudPluginInterface pluginInterface, ICommandManager commands, IFramework framework,
         ICondition condition, IClientState clientState, IPlayerState playerState, IDataManager dataManager,
@@ -96,7 +100,11 @@ public sealed class Plugin : IDalamudPlugin
 
     public void Dispose()
     {
-        if (iceOwned) ipc.TryDisableIce();
+        if (iceOwned)
+        {
+            ipc.TryDisableIce();
+            if (ipc.TryStopArtisan()) artisanStopRequestOwned = true;
+        }
         ClearOwnedIceStopAfterCurrent();
         if (testMode) ipc.TrySetIceStopAfterCurrent(false);
         framework.Update -= OnUpdate;
@@ -410,6 +418,12 @@ public sealed class Plugin : IDalamudPlugin
     {
         if (!actionSent)
         {
+            if (!ipc.TryPrepareArtisanForIce())
+            {
+                Fail("无法解除 Artisan 的外部停止状态，ICE 启动已取消");
+                return;
+            }
+            artisanStopRequestOwned = false;
             if (testMode && !ipc.TrySetIceStopAfterCurrent(true))
             {
                 Fail("无法设置 ICE“完成当前任务后停止”，完整测试已取消");
@@ -459,6 +473,17 @@ public sealed class Plugin : IDalamudPlugin
         }
         if (!ice.IsRunning)
         {
+            if (ipc.TryGetArtisan(out var artisan) && artisan.IsBusy)
+            {
+                cycleOutcomeMessage = testMode && testMissionObserved
+                    ? $"完整测试成功：ICE 已完成任务 {observedMissionId}"
+                    : "ICE 已停止，但 Artisan 制作仍在收尾";
+                rotatingIceJob = !testMode && (rotatingIceJob
+                    || (config.AutoSelectIceJob && activeIceJobId != 0
+                        && gearsets.GetJobLevel(activeIceJobId) >= config.IceJobLevelCap));
+                Transition(SchedulerState.StoppingIce, "ICE 状态已停止，正在终止 Artisan 制作并等待完全空闲");
+                return;
+            }
             var currentLevel = activeIceJobId == 0 ? 0 : gearsets.GetJobLevel(activeIceJobId);
             if (!testMode && (rotatingIceJob || (config.AutoSelectIceJob && currentLevel >= config.IceJobLevelCap)))
             {
@@ -539,28 +564,67 @@ public sealed class Plugin : IDalamudPlugin
 
     private void TickStoppingIce(DateTime now)
     {
-        if (!actionSent)
+        if (!actionSent || now >= nextIceStopRetryUtc)
         {
-            if (iceOwned) ipc.TryDisableIce();
+            var firstRequest = !actionSent;
+            var iceStopSent = ipc.TryDisableIce();
+            if (ipc.TryGetArtisan(out var artisanBeforeStop))
+            {
+                if (!artisanBeforeStop.StopRequested && ipc.TryStopArtisan())
+                    artisanStopRequestOwned = true;
+            }
+            else if (!artisanStopRequestOwned && ipc.TryStopArtisan())
+            {
+                artisanStopRequestOwned = true;
+            }
             actionSent = true;
-            status = "已请求 ICE 停止";
+            nextIceStopRetryUtc = now.AddSeconds(2);
+            status = "已请求 ICE 与 Artisan 停止，等待制作完全结束";
+            if (firstRequest)
+                AddUiLog("停止", $"已发送 ICE 停止={iceStopSent}、Artisan 停止={artisanStopRequestOwned}");
         }
-        if (ipc.TryGetIce(out var ice) && !ice.IsRunning)
+
+        var iceKnown = ipc.TryGetIce(out var ice);
+        var artisanKnown = ipc.TryGetArtisan(out var artisan);
+        var iceStopped = iceKnown && !ice.IsRunning;
+        var artisanStopped = artisanKnown && !artisan.IsBusy;
+        if (iceStopped && artisanStopped)
         {
+            stopConfirmedSinceUtc ??= now;
+            if (now - stopConfirmedSinceUtc < TimeSpan.FromSeconds(1.5))
+            {
+                status = "ICE 与 Artisan 已停止，正在确认状态稳定";
+                return;
+            }
+            if (artisanStopRequestOwned)
+            {
+                // Leave Artisan idle but usable after this scheduler-owned stop.
+                // Clearing the stop flag may resume the old mode, so the helper
+                // immediately keeps Endurance disabled.
+                if (!ipc.TryPrepareArtisanForIce())
+                {
+                    status = "ICE 与 Artisan 已停止，正在解除 Artisan 外部停止锁";
+                    return;
+                }
+                artisanStopRequestOwned = false;
+            }
             if (rotatingIceJob)
             {
                 RotateIceJobOrRestore(now, $"{activeIceJobName} 已达到等级上限");
                 return;
             }
             if (testMode) ipc.TrySetIceStopAfterCurrent(false);
-            BeginRestore("ICE 已停止，正在恢复捕鱼职业");
+            BeginRestore("ICE 与 Artisan 已完全停止，正在恢复捕鱼职业");
             return;
         }
-        if (Elapsed(now) > TimeSpan.FromSeconds(config.IceStopTimeoutSeconds))
+
+        stopConfirmedSinceUtc = null;
+        status = $"正在停止：ICE={(iceKnown ? ice.State : "IPC 不可用")}，Artisan={(artisanKnown ? artisan.IsBusy ? "仍在制作" : "已空闲" : "IPC 不可用")}";
+        if (!stopTimeoutLogged && Elapsed(now) > TimeSpan.FromSeconds(config.IceStopTimeoutSeconds))
         {
-            rotatingIceJob = false;
-            ClearOwnedIceStopAfterCurrent();
-            BeginRestore("ICE 停止确认超时，继续恢复捕鱼职业");
+            stopTimeoutLogged = true;
+            lastError = "ICE/Artisan 停止等待超时；为避免与 MissFisher 冲突，将继续重试而不提前恢复捕鱼";
+            AddUiLog("警告", lastError);
         }
     }
 
@@ -697,6 +761,12 @@ public sealed class Plugin : IDalamudPlugin
         stateSinceUtc = DateTime.UtcNow;
         actionSent = false;
         resumeSent = false;
+        if (next == SchedulerState.StoppingIce)
+        {
+            nextIceStopRetryUtc = DateTime.MinValue;
+            stopConfirmedSinceUtc = null;
+            stopTimeoutLogged = false;
+        }
         status = message;
         SaveCheckpoint();
         log.Information("State -> {State}: {Message}", next, message);
