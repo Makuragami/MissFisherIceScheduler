@@ -71,7 +71,8 @@ public sealed class Plugin : IDalamudPlugin
         config = pluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         config.Checkpoint ??= new CycleCheckpoint();
         ipc = new PluginIpc(pluginInterface, log);
-        iceTravel = new IceTravelHelper(pluginInterface, clientState, condition, dataManager, gameGui, objects, log);
+        iceTravel = new IceTravelHelper(pluginInterface, clientState, condition, dataManager, gameGui, objects, log,
+            message => AddUiLog("旅行", message));
         gearsets = new GearsetHelper(playerState);
         commands.AddHandler(Command, new CommandInfo(OnCommand) { HelpMessage = "/mfice - 打开配置；enable | disable | abort | reset | status" });
         framework.Update += OnUpdate;
@@ -131,9 +132,10 @@ public sealed class Plugin : IDalamudPlugin
         log.Information("WKSPlanetSelect user event: type={Type}({TypeId}), param={Param}, nodeId={NodeId}",
             receive.AtkEventType, eventType, receive.EventParam, nodeId);
 
-        if (eventType is not ((int)FFXIVClientStructs.FFXIV.Component.GUI.AtkEventType.MouseClick)
-            and not ((int)FFXIVClientStructs.FFXIV.Component.GUI.AtkEventType.ButtonClick)
-            and not ((int)FFXIVClientStructs.FFXIV.Component.GUI.AtkEventType.DialogueSubmit))
+        // WKSPlanetSelect uses ButtonClick param 1 for changing the selected planet and
+        // param 7 for the bottom Move button. Never let navigation clicks overwrite Move.
+        if (eventType != (int)FFXIVClientStructs.FFXIV.Component.GUI.AtkEventType.ButtonClick
+            || receive.EventParam != 7)
             return;
 
         config.PlanetMoveEventType = eventType;
@@ -417,7 +419,7 @@ public sealed class Plugin : IDalamudPlugin
         }
         if (testMode && !testMissionObserved && now - iceRunStartedUtc > TimeSpan.FromSeconds(Math.Clamp(config.TestMissionStartTimeoutSeconds, 15, 300)))
         {
-            cycleOutcomeMessage = "完整测试失败：ICE 已启动，但一直没有领取任务。请检查 ICE 的 Agenda、Auxesia 区域和当前职业任务配置。";
+            cycleOutcomeMessage = $"完整测试失败：ICE 已启动，但一直没有领取任务。请检查 ICE 的 Agenda、{GetRegionLabel(config.IceTerritoryId)} 区域和当前职业任务配置。";
             lastError = cycleOutcomeMessage;
             AddUiLog("错误", cycleOutcomeMessage);
             Transition(SchedulerState.StoppingIce, "完整测试：等待任务超时，正在停止 ICE");
@@ -754,6 +756,7 @@ public sealed class Plugin : IDalamudPlugin
         ImGui.Separator();
         ImGui.TextUnformatted($"调度：{(config.Enabled ? (config.DryRun ? "已启动（只观察）" : "已启动") : "已停止")}");
         ImGui.TextUnformatted($"阶段：{state}{(testMode ? "（完整测试）" : string.Empty)}");
+        ImGui.TextUnformatted($"目标区域：{GetRegionLabel(config.IceTerritoryId)}");
         ImGui.TextWrapped($"状态：{status}");
         if (!string.IsNullOrWhiteSpace(lastError)) ImGui.TextWrapped($"最近错误：{lastError}");
         if (ipc.TryGetIce(out var ice))
@@ -791,10 +794,16 @@ public sealed class Plugin : IDalamudPlugin
         if (ImGui.InputInt("测试等待 ICE 领取任务（秒）", ref testTimeout)) { config.TestMissionStartTimeoutSeconds = Math.Clamp(testTimeout, 15, 300); Save(); }
 
         var territory = config.IceTerritoryId;
-        var territoryLabel = territory switch { 1237 => "Sinus Ardorum", 1291 => "Phaenna", 1310 => "Oizys", 1319 => "Auxesia", _ => $"区域 {territory}" };
+        var territoryLabel = GetRegionLabel(territory);
         if (ImGui.BeginCombo("ICE 目标区域", territoryLabel))
         {
-            foreach (var option in new[] { (1237u, "Sinus Ardorum"), (1291u, "Phaenna"), (1310u, "Oizys"), (1319u, "Auxesia") })
+            foreach (var option in new[]
+            {
+                (1237u, "憧憬湾（Sinus Ardorum）"),
+                (1291u, "法恩娜（Phaenna）"),
+                (1310u, "俄匊斯（Oizys）"),
+                (1319u, "奥克塞西亚（Auxesia）"),
+            })
                 if (ImGui.Selectable(option.Item2, option.Item1 == territory)) { config.IceTerritoryId = option.Item1; Save(); }
             ImGui.EndCombo();
         }
@@ -815,7 +824,7 @@ public sealed class Plugin : IDalamudPlugin
         if (builtInTravel)
         {
             ImGui.TextWrapped("自动传送到最佳兔威洞，使用 vnavmesh 前往驾行威并确认进入。无需快捷传送面板。");
-            ImGui.TextWrapped("与驾行威交互后会打开专用目的地界面；目标为 Auxesia 时，确认显示奥克塞西亚行星后自动点击“移动”。");
+            ImGui.TextWrapped("与驾行威交互后会打开专用目的地界面；调度器会切换到所选的四个宇宙探索区域之一，确认名称后点击“移动”。");
         }
         else
         {
@@ -858,4 +867,13 @@ public sealed class Plugin : IDalamudPlugin
         }
         ImGui.EndChild();
     }
+
+    private static string GetRegionLabel(uint territoryId) => territoryId switch
+    {
+        1237 => "憧憬湾（Sinus Ardorum）",
+        1291 => "法恩娜（Phaenna）",
+        1310 => "俄匊斯（Oizys）",
+        1319 => "奥克塞西亚（Auxesia）",
+        _ => $"区域 {territoryId}",
+    };
 }

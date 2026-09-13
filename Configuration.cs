@@ -13,7 +13,7 @@ public sealed class Configuration : IPluginConfiguration
     public int RecoveryReserveMinutes { get; set; } = 10;
     public int IceStopTimeoutSeconds { get; set; } = 60;
     public int TestMissionStartTimeoutSeconds { get; set; } = 60;
-    public uint IceTerritoryId { get; set; } = 1319;
+    public uint IceTerritoryId { get; set; } = 1237;
     public int IceGearsetId { get; set; } = -1;
     public bool UseBuiltInIceTravel { get; set; } = true;
     public uint IceEntranceAetheryteId { get; set; } = 175;

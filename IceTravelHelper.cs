@@ -43,8 +43,7 @@ internal sealed class IceTravelHelper
     private enum PlanetSelectAction
     {
         None,
-        WaitingForTarget,
-        WaitingForMoveButton,
+        SelectingTarget,
         ClickedMove,
     }
 
@@ -54,6 +53,7 @@ internal sealed class IceTravelHelper
     private readonly IGameGui gameGui;
     private readonly IObjectTable objects;
     private readonly IPluginLog log;
+    private readonly Action<string>? eventSink;
     private readonly ICallGateSubscriber<bool> navReady;
     private readonly ICallGateSubscriber<bool> pathRunning;
     private readonly ICallGateSubscriber<Vector3, bool, bool> moveTo;
@@ -68,9 +68,12 @@ internal sealed class IceTravelHelper
     private bool moveRequested;
     private bool areaMenuRequested;
     private bool planetUiLogged;
+    private DateTime nextPlanetSelectionUtc;
+    private int planetSelectionAttempts;
 
     public IceTravelHelper(IDalamudPluginInterface pi, IClientState clientState, ICondition condition,
-        IDataManager dataManager, IGameGui gameGui, IObjectTable objects, IPluginLog log)
+        IDataManager dataManager, IGameGui gameGui, IObjectTable objects, IPluginLog log,
+        Action<string>? eventSink = null)
     {
         this.clientState = clientState;
         this.condition = condition;
@@ -78,6 +81,7 @@ internal sealed class IceTravelHelper
         this.gameGui = gameGui;
         this.objects = objects;
         this.log = log;
+        this.eventSink = eventSink;
         navReady = pi.GetIpcSubscriber<bool>("vnavmesh.Nav.IsReady");
         pathRunning = pi.GetIpcSubscriber<bool>("vnavmesh.Path.IsRunning");
         moveTo = pi.GetIpcSubscriber<Vector3, bool, bool>("vnavmesh.SimpleMove.PathfindAndMoveTo");
@@ -98,6 +102,8 @@ internal sealed class IceTravelHelper
         moveRequested = false;
         areaMenuRequested = false;
         planetUiLogged = false;
+        nextPlanetSelectionUtc = DateTime.MinValue;
+        planetSelectionAttempts = 0;
     }
 
     public bool Tick(DateTime now, Configuration config, out string? error)
@@ -182,6 +188,7 @@ internal sealed class IceTravelHelper
         Status = $"正在传送到 {config.IceEntranceAetheryteName}";
         log.Information("Built-in ICE travel: teleport requested, aetheryte={AetheryteId}, territory={TerritoryId}",
             match.Row.RowId, entranceTerritoryId);
+        eventSink?.Invoke($"已请求传送到 {config.IceEntranceAetheryteName}");
         return false;
     }
 
@@ -257,6 +264,7 @@ internal sealed class IceTravelHelper
                 log.Information("Built-in ICE travel: resolved NPC name={Name}, dataId={DataId}, worldPosition={Position}",
                     npc.Name, npc.BaseId, destination);
             log.Information("Built-in ICE travel: vnav target NPC world position={Position}", destination);
+            eventSink?.Invoke($"vnavmesh 开始前往 {config.IceEntranceNpcName}，距离 {distance:F1} 米");
             if (!moveTo.InvokeFunc(destination, false))
             {
                 error = "vnavmesh 未能开始前往架行威";
@@ -271,6 +279,7 @@ internal sealed class IceTravelHelper
 
     private unsafe bool TickInteract(DateTime now, Configuration config)
     {
+        var regionName = GetRegionName(config.IceTerritoryId);
         if (now < nextActionUtc)
             return false;
 
@@ -288,13 +297,13 @@ internal sealed class IceTravelHelper
         {
             if (TryConfirmYes())
             {
-                Status = "正在确认进入 Auxesia";
+                Status = $"正在确认进入 {regionName}";
                 return false;
             }
 
             if (now - entranceSelectionUtc < TimeSpan.FromSeconds(20))
             {
-                Status = "已选择 Auxesia，等待区域切换";
+                Status = $"已选择 {regionName}，等待区域切换";
                 return false;
             }
 
@@ -308,22 +317,17 @@ internal sealed class IceTravelHelper
         if (planetAction == PlanetSelectAction.ClickedMove)
         {
             entranceSelectionUtc = now;
-            Status = "已在目的地界面选择奥克塞西亚并点击移动，等待换区";
+            Status = $"已在目的地界面选择 {regionName} 并点击移动，等待换区";
             log.Information("Built-in ICE travel: clicked WKSPlanetSelect Move for targetTerritory={Territory}",
                 config.IceTerritoryId);
+            eventSink?.Invoke($"已确认 {regionName} 并点击移动");
             return false;
         }
-        if (planetAction == PlanetSelectAction.WaitingForTarget)
+        if (planetAction == PlanetSelectAction.SelectingTarget)
         {
-            Status = "目的地界面当前不是奥克塞西亚，等待选择目标";
+            Status = $"正在目的地界面切换到 {regionName}";
             return false;
         }
-        if (planetAction == PlanetSelectAction.WaitingForMoveButton)
-        {
-            Status = "已识别奥克塞西亚；请手动点击一次“移动”以学习国服界面事件";
-            return false;
-        }
-
         var selectAction = TrySelectString(config.IceTerritoryId, out var selectedIndex, out var entryCount);
         if (selectAction == SelectStringAction.OpenedAreaMenu)
         {
@@ -337,7 +341,7 @@ internal sealed class IceTravelHelper
         if (selectAction == SelectStringAction.SelectedDestination)
         {
             entranceSelectionUtc = now;
-            Status = $"已选择 Auxesia 入口（第 {selectedIndex + 1} 项），等待换区";
+            Status = $"已选择 {regionName} 入口（第 {selectedIndex + 1} 项），等待换区";
             log.Information("Built-in ICE travel: selected destination index={Index}, entryCount={Count}, targetTerritory={Territory}",
                 selectedIndex, entryCount, config.IceTerritoryId);
             return false;
@@ -345,7 +349,7 @@ internal sealed class IceTravelHelper
 
         if (TryConfirmYes())
         {
-            Status = "正在确认进入 Auxesia";
+            Status = $"正在确认进入 {regionName}";
             return false;
         }
 
@@ -491,62 +495,81 @@ internal sealed class IceTravelHelper
             planetUiLogged = true;
         }
 
-        var targetVisible = config.IceTerritoryId == 1319
-            && texts.Any(x => x.Contains("奥克塞西亚", StringComparison.OrdinalIgnoreCase)
-                || x.Contains("Auxesia", StringComparison.OrdinalIgnoreCase));
+        var targetVisible = IsRegionVisible(texts, config.IceTerritoryId);
         if (!targetVisible)
-            return PlanetSelectAction.WaitingForTarget;
-
-        if (config.PlanetMoveEventType >= 0 && config.PlanetMoveEventParam >= 0)
         {
-            var capturedType = (AtkEventType)config.PlanetMoveEventType;
-            var capturedNode = config.PlanetMoveEventNodeId == 0
-                ? null
-                : addon->GetNodeById(config.PlanetMoveEventNodeId);
-            var capturedEvent = capturedNode is null ? null : FindEvent(capturedNode, capturedType, config.PlanetMoveEventParam);
-            if (capturedEvent is not null)
-            {
-                addon->ReceiveEvent(capturedType, config.PlanetMoveEventParam,
-                    capturedNode->AtkEventManager.Event, null);
-            }
-            else
-            {
-                var syntheticEvent = default(AtkEvent);
-                syntheticEvent.State.EventType = capturedType;
-                syntheticEvent.Param = (uint)config.PlanetMoveEventParam;
-                syntheticEvent.Node = capturedNode;
-                addon->ReceiveEvent(capturedType, config.PlanetMoveEventParam, &syntheticEvent, null);
-            }
-            log.Information("Built-in ICE travel: replayed captured WKSPlanetSelect event type={Type}, param={Param}, nodeId={NodeId}",
-                config.PlanetMoveEventType, config.PlanetMoveEventParam, config.PlanetMoveEventNodeId);
-            return PlanetSelectAction.ClickedMove;
+            if (DateTime.UtcNow < nextPlanetSelectionUtc)
+                return PlanetSelectAction.SelectingTarget;
+
+            var currentIndex = GetVisibleRegionIndex(texts);
+            var targetIndex = GetRegionIndex(config.IceTerritoryId);
+            // ButtonClick 1 is the left arrow observed on the CN client; 2 is its
+            // paired right arrow. Move one step and re-read the title before continuing.
+            var eventParam = currentIndex >= 0 && targetIndex > currentIndex ? 2 : 1;
+            SendPlanetButton(addon, eventParam);
+            planetSelectionAttempts++;
+            nextPlanetSelectionUtc = DateTime.UtcNow.AddMilliseconds(900);
+            log.Information("Built-in ICE travel: selecting planet, currentIndex={Current}, targetIndex={Target}, eventParam={Param}, attempt={Attempt}",
+                currentIndex, targetIndex, eventParam, planetSelectionAttempts);
+            var currentLabel = currentIndex < 0 ? "未知" : (currentIndex + 1).ToString();
+            eventSink?.Invoke($"切换目的地：当前序号 {currentLabel} → {GetRegionName(config.IceTerritoryId)}，事件 {eventParam}");
+            return PlanetSelectAction.SelectingTarget;
         }
 
-        if (moveButton is null && moveCollision is null)
-            return PlanetSelectAction.WaitingForMoveButton;
-
-        AtkEvent* clickEvent;
-        AtkEvent* eventData;
-        if (moveButton is not null)
-        {
-            var ownerNode = moveButton->AtkComponentBase.OwnerNode;
-            eventData = ownerNode is null ? null : ownerNode->AtkResNode.AtkEventManager.Event;
-            clickEvent = ownerNode is null ? null : FindClickEvent(&ownerNode->AtkResNode);
-        }
-        else
-        {
-            eventData = moveCollision->AtkResNode.AtkEventManager.Event;
-            clickEvent = FindClickEvent(&moveCollision->AtkResNode);
-        }
-        if (clickEvent is null)
-        {
-            log.Warning("Built-in ICE travel: WKSPlanetSelect move target has no click event");
-            return PlanetSelectAction.WaitingForMoveButton;
-        }
-
-        addon->ReceiveEvent(clickEvent->State.EventType, (int)clickEvent->Param, eventData, null);
+        // The CN client uses ButtonClick param 7 for the bottom Move button. This
+        // event is stable even though the button is not exposed in the static node tree.
+        SendPlanetButton(addon, 7);
+        log.Information("Built-in ICE travel: sent WKSPlanetSelect Move event param=7 for {Region}",
+            GetRegionName(config.IceTerritoryId));
         return PlanetSelectAction.ClickedMove;
     }
+
+    private static unsafe void SendPlanetButton(AtkUnitBase* addon, int eventParam)
+    {
+        var syntheticEvent = default(AtkEvent);
+        syntheticEvent.State.EventType = AtkEventType.ButtonClick;
+        syntheticEvent.Param = (uint)eventParam;
+        addon->ReceiveEvent(AtkEventType.ButtonClick, eventParam, &syntheticEvent, null);
+    }
+
+    private static int GetRegionIndex(uint territoryId) => territoryId switch
+    {
+        1237 => 0,
+        1291 => 1,
+        1310 => 2,
+        1319 => 3,
+        _ => 0,
+    };
+
+    private static int GetVisibleRegionIndex(IEnumerable<string> texts)
+    {
+        foreach (var territoryId in IceTerritories)
+            if (IsRegionVisible(texts, territoryId))
+                return GetRegionIndex(territoryId);
+        return -1;
+    }
+
+    private static bool IsRegionVisible(IEnumerable<string> texts, uint territoryId)
+    {
+        var aliases = territoryId switch
+        {
+            1237 => new[] { "憧憬湾", "Sinus Ardorum", "Sinus" },
+            1291 => new[] { "法恩娜", "Phaenna" },
+            1310 => new[] { "俄匊斯", "Oizys" },
+            1319 => new[] { "奥克塞西亚", "Auxesia" },
+            _ => Array.Empty<string>(),
+        };
+        return texts.Any(text => aliases.Any(alias => text.Contains(alias, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static string GetRegionName(uint territoryId) => territoryId switch
+    {
+        1237 => "憧憬湾（Sinus Ardorum）",
+        1291 => "法恩娜（Phaenna）",
+        1310 => "俄匊斯（Oizys）",
+        1319 => "奥克塞西亚（Auxesia）",
+        _ => $"区域 {territoryId}",
+    };
 
     private unsafe void ScanPlanetUi(AtkUldManager* manager, List<string> texts, List<string> buttonCandidates,
         ref AtkComponentButton* moveButton, ref AtkComponentButton* bottomButton, ref float bottomButtonY,
