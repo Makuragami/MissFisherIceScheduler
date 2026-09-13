@@ -19,6 +19,8 @@ namespace MissFisherIceScheduler;
 
 internal sealed class IceTravelHelper
 {
+    private static readonly Vector3 EntranceWorldPosition = new(25.680908f, -137.41669f, -411.30695f);
+
     private enum Phase
     {
         Resolving,
@@ -81,7 +83,7 @@ internal sealed class IceTravelHelper
             return phase switch
             {
                 Phase.Resolving => TickResolveAndTeleport(now, config, out error),
-                Phase.WaitingForTeleport => TickWaitForTeleport(config),
+                Phase.WaitingForTeleport => TickWaitForTeleport(now, config),
                 Phase.MovingToNpc => TickMoveToNpc(now, config, out error),
                 Phase.Interacting => TickInteract(now, config),
                 _ => false,
@@ -142,14 +144,14 @@ internal sealed class IceTravelHelper
 
         telepo->Teleport(match.Row.RowId, 0);
         phase = Phase.WaitingForTeleport;
-        nextActionUtc = now.AddSeconds(2);
+        nextActionUtc = now.AddSeconds(12);
         Status = $"正在传送到 {config.IceEntranceAetheryteName}";
         log.Information("Built-in ICE travel: teleport requested, aetheryte={AetheryteId}, territory={TerritoryId}",
             match.Row.RowId, entranceTerritoryId);
         return false;
     }
 
-    private bool TickWaitForTeleport(Configuration config)
+    private bool TickWaitForTeleport(DateTime now, Configuration config)
     {
         if (condition[ConditionFlag.BetweenAreas] || condition[ConditionFlag.BetweenAreas51])
         {
@@ -162,6 +164,15 @@ internal sealed class IceTravelHelper
             phase = Phase.MovingToNpc;
             moveRequested = false;
             Status = "传送完成，准备前往架行威";
+            return false;
+        }
+
+        if (now >= nextActionUtc)
+        {
+            phase = Phase.Resolving;
+            Status = $"传送请求未生效，正在重试 {config.IceEntranceAetheryteName}";
+            log.Warning("Built-in ICE travel: teleport did not change territory within timeout; retrying, current={CurrentTerritory}, expected={ExpectedTerritory}",
+                clientState.TerritoryType, entranceTerritoryId);
         }
         return false;
     }
@@ -174,27 +185,13 @@ internal sealed class IceTravelHelper
             return false;
 
         var npc = FindEntranceNpc(config, player);
-        if (npc is null)
+        var destination = npc?.Position ?? EntranceWorldPosition;
+        if (npc is null && now >= nextNpcScanLogUtc)
         {
-            // The configured coordinates are map/UI coordinates, not world coordinates.
-            // Wait for the actual event NPC instead of sending an unreachable point to vnavmesh.
-            Status = $"等待入口 NPC：{config.IceEntranceNpcName}";
-            if (now >= nextNpcScanLogUtc)
-            {
-                var nearby = objects
-                    .Where(x => Vector3.DistanceSquared(x.Position, player.Position) <= 10000f)
-                    .Where(x => x.ObjectKind is DalamudObjectKind.EventNpc or DalamudObjectKind.BattleNpc)
-                    .Take(30)
-                    .Select(x => $"{x.Name} kind={x.ObjectKind} baseId={x.BaseId} targetable={x.IsTargetable} pos={x.Position}")
-                    .ToArray();
-                log.Information("Built-in ICE travel: entrance NPC not resolved; nearby objects: {Objects}",
-                    nearby.Length == 0 ? "<none>" : string.Join(" | ", nearby));
-                nextNpcScanLogUtc = now.AddSeconds(5);
-            }
-            return false;
+            log.Information("Built-in ICE travel: entrance NPC outside object range; using known world position={Position}",
+                EntranceWorldPosition);
+            nextNpcScanLogUtc = now.AddSeconds(15);
         }
-
-        var destination = npc.Position;
         var distance = Vector3.Distance(player.Position, destination);
         if (distance <= 4.5f)
         {
@@ -219,8 +216,9 @@ internal sealed class IceTravelHelper
                 Status = "等待 vnavmesh 地图构建完成";
                 return false;
             }
-            log.Information("Built-in ICE travel: resolved NPC name={Name}, dataId={DataId}, worldPosition={Position}",
-                npc.Name, npc.BaseId, destination);
+            if (npc is not null)
+                log.Information("Built-in ICE travel: resolved NPC name={Name}, dataId={DataId}, worldPosition={Position}",
+                    npc.Name, npc.BaseId, destination);
             log.Information("Built-in ICE travel: vnav target NPC world position={Position}", destination);
             if (!moveTo.InvokeFunc(destination, false))
             {

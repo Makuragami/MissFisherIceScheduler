@@ -483,7 +483,7 @@ public sealed class Plugin : IDalamudPlugin
         if (ImGui.Checkbox("使用内置最佳兔威洞入口流程", ref builtInTravel)) { config.UseBuiltInIceTravel = builtInTravel; Save(); }
         if (builtInTravel)
         {
-            ImGui.TextWrapped("自动传送到最佳兔威洞，前往 (21.9, 13.2, -1.4)，与架行威交互并确认进入。无需快捷传送面板。");
+            ImGui.TextWrapped("自动传送到最佳兔威洞，使用 vnavmesh 前往驾行威并确认进入。无需快捷传送面板。");
             var optionIndex = config.IceEntranceOptionIndex;
             if (ImGui.InputInt("入口对话选项序号（从 0 开始）", ref optionIndex))
             { config.IceEntranceOptionIndex = Math.Clamp(optionIndex, 0, 10); Save(); }

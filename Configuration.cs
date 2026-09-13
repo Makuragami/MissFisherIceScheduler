@@ -17,8 +17,8 @@ public sealed class Configuration : IPluginConfiguration
     public bool UseBuiltInIceTravel { get; set; } = true;
     public uint IceEntranceAetheryteId { get; set; } = 175;
     public string IceEntranceAetheryteName { get; set; } = "最佳兔威洞";
-    public Vector3 IceEntrancePosition { get; set; } = new(21.9f, 13.2f, -1.4f);
-    public string IceEntranceNpcName { get; set; } = "架行威";
+    public Vector3 IceEntrancePosition { get; set; } = new(25.680908f, -137.41669f, -411.30695f);
+    public string IceEntranceNpcName { get; set; } = "驾行威";
     public int IceEntranceOptionIndex { get; set; }
     // Multiple external travel/interaction commands can be chained with "||".
     public string IceTravelCommand { get; set; } = string.Empty;
