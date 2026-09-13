@@ -32,6 +32,13 @@ internal sealed class IceTravelHelper
         Interacting,
     }
 
+    private enum SelectStringAction
+    {
+        None,
+        OpenedAreaMenu,
+        SelectedDestination,
+    }
+
     private readonly IClientState clientState;
     private readonly ICondition condition;
     private readonly IDataManager dataManager;
@@ -48,7 +55,9 @@ internal sealed class IceTravelHelper
     private DateTime nextActionUtc;
     private DateTime nextNpcScanLogUtc;
     private DateTime entranceSelectionUtc;
+    private DateTime areaMenuRequestUtc;
     private bool moveRequested;
+    private bool areaMenuRequested;
 
     public IceTravelHelper(IDalamudPluginInterface pi, IClientState clientState, ICondition condition,
         IDataManager dataManager, IGameGui gameGui, IObjectTable objects, IPluginLog log)
@@ -74,7 +83,9 @@ internal sealed class IceTravelHelper
         nextActionUtc = DateTime.MinValue;
         nextNpcScanLogUtc = DateTime.MinValue;
         entranceSelectionUtc = DateTime.MinValue;
+        areaMenuRequestUtc = DateTime.MinValue;
         moveRequested = false;
+        areaMenuRequested = false;
     }
 
     public bool Tick(DateTime now, Configuration config, out string? error)
@@ -259,12 +270,44 @@ internal sealed class IceTravelHelper
             return false;
         }
 
-        if (TrySelectString(config.IceTerritoryId, out var selectedIndex))
+        // 目标区域已经选定后只处理确认窗口并等待换区。SelectString 可能还会
+        // 短暂保持可见，若再次点击会不断刷新等待计时，导致永远无法超时重试。
+        if (entranceSelectionUtc != DateTime.MinValue)
+        {
+            if (TryConfirmYes())
+            {
+                Status = "正在确认进入 Auxesia";
+                return false;
+            }
+
+            if (now - entranceSelectionUtc < TimeSpan.FromSeconds(20))
+            {
+                Status = "已选择 Auxesia，等待区域切换";
+                return false;
+            }
+
+            entranceSelectionUtc = DateTime.MinValue;
+            areaMenuRequested = false;
+            areaMenuRequestUtc = DateTime.MinValue;
+            log.Warning("Built-in ICE travel: entrance selection did not change territory; retrying NPC interaction");
+        }
+
+        var selectAction = TrySelectString(config.IceTerritoryId, out var selectedIndex, out var entryCount);
+        if (selectAction == SelectStringAction.OpenedAreaMenu)
+        {
+            areaMenuRequestUtc = now;
+            Status = $"已打开宇宙探索区域选择（入口菜单共 {entryCount} 项）";
+            log.Information("Built-in ICE travel: opened destination submenu from entry index={Index}, entryCount={Count}",
+                selectedIndex, entryCount);
+            return false;
+        }
+
+        if (selectAction == SelectStringAction.SelectedDestination)
         {
             entranceSelectionUtc = now;
             Status = $"已选择 Auxesia 入口（第 {selectedIndex + 1} 项），等待换区";
-            log.Information("Built-in ICE travel: selected entrance option index={Index}, targetTerritory={Territory}",
-                selectedIndex, config.IceTerritoryId);
+            log.Information("Built-in ICE travel: selected destination index={Index}, entryCount={Count}, targetTerritory={Territory}",
+                selectedIndex, entryCount, config.IceTerritoryId);
             return false;
         }
 
@@ -272,17 +315,6 @@ internal sealed class IceTravelHelper
         {
             Status = "正在确认进入 Auxesia";
             return false;
-        }
-
-        if (entranceSelectionUtc != DateTime.MinValue)
-        {
-            if (now - entranceSelectionUtc < TimeSpan.FromSeconds(20))
-            {
-                Status = "已选择 Auxesia，等待区域切换";
-                return false;
-            }
-            entranceSelectionUtc = DateTime.MinValue;
-            log.Warning("Built-in ICE travel: entrance selection did not change territory; retrying NPC interaction");
         }
 
         var player = objects.LocalPlayer;
@@ -336,7 +368,7 @@ internal sealed class IceTravelHelper
         return true;
     }
 
-    private unsafe bool TrySelectString(uint targetTerritoryId, out int selectedIndex)
+    private unsafe SelectStringAction TrySelectString(uint targetTerritoryId, out int selectedIndex, out int entryCount)
     {
         selectedIndex = targetTerritoryId switch
         {
@@ -346,15 +378,44 @@ internal sealed class IceTravelHelper
             1319 => 3,
             _ => 3,
         };
+        entryCount = 0;
         var addon = (AddonSelectString*)gameGui.GetAddonByName("SelectString", 1).Address;
         if (addon is null || !addon->AtkUnitBase.IsVisible || !addon->AtkUnitBase.IsReady)
-            return false;
-        var count = addon->PopupMenu.PopupMenu.EntryCount;
-        if (count <= 0)
-            return false;
-        selectedIndex = Math.Clamp(selectedIndex, 0, count - 1);
+            return SelectStringAction.None;
+        entryCount = addon->PopupMenu.PopupMenu.EntryCount;
+        if (entryCount <= 0)
+            return SelectStringAction.None;
+
+        // 驾行威先显示入口操作菜单（当前中文客户端为 3 项），并不是四个区域。
+        // 先选第一项打开区域列表，之后才按目标 Territory 的固定顺序选择。
+        // 不可把索引 3 clamp 成索引 2，否则会点中取消/返回并无限重试。
+        if (!areaMenuRequested && entryCount < 4)
+        {
+            selectedIndex = 0;
+            addon->FireCallbackInt(selectedIndex);
+            areaMenuRequested = true;
+            return SelectStringAction.OpenedAreaMenu;
+        }
+
+        if (entryCount < 4)
+        {
+            if (areaMenuRequestUtc != DateTime.MinValue &&
+                DateTime.UtcNow - areaMenuRequestUtc >= TimeSpan.FromSeconds(5))
+            {
+                selectedIndex = 0;
+                addon->FireCallbackInt(selectedIndex);
+                areaMenuRequestUtc = DateTime.UtcNow;
+                log.Warning("Built-in ICE travel: destination submenu did not appear; retrying entry index 0, entryCount={Count}",
+                    entryCount);
+                return SelectStringAction.OpenedAreaMenu;
+            }
+            Status = $"等待区域选择菜单（当前仍为 {entryCount} 项）";
+            return SelectStringAction.None;
+        }
+
+        selectedIndex = Math.Clamp(selectedIndex, 0, entryCount - 1);
         addon->FireCallbackInt(selectedIndex);
-        return true;
+        return SelectStringAction.SelectedDestination;
     }
 
     private unsafe bool TryConfirmYes()
