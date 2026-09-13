@@ -15,6 +15,11 @@ public sealed class Configuration : IPluginConfiguration
     public int TestMissionStartTimeoutSeconds { get; set; } = 60;
     public uint IceTerritoryId { get; set; } = 1237;
     public int IceGearsetId { get; set; } = -1;
+    public bool AutoSelectIceJob { get; set; } = true;
+    public int IceJobLevelCap { get; set; } = 100;
+    public bool IncludeFisherInIceRotation { get; set; } = true;
+    public IceJobSelectionStrategy IceJobSelectionStrategy { get; set; } = IceJobSelectionStrategy.LowestLevel;
+    public List<uint> ExcludedIceJobIds { get; set; } = [];
     public bool UseBuiltInIceTravel { get; set; } = true;
     public uint IceEntranceAetheryteId { get; set; } = 175;
     public string IceEntranceAetheryteName { get; set; } = "最佳兔威洞";
@@ -42,6 +47,9 @@ public sealed class CycleCheckpoint
     public int? FisherGearsetId { get; set; }
     public bool IceOwned { get; set; }
     public bool TestMode { get; set; }
+    public int ActiveIceGearsetId { get; set; } = -1;
+    public uint ActiveIceJobId { get; set; }
+    public List<uint> FailedIceJobIds { get; set; } = [];
     public string ChecklistId { get; set; } = string.Empty;
     public string ChecklistName { get; set; } = string.Empty;
     public MissFisherResumeKind ResumeKind { get; set; } = MissFisherResumeKind.Collection;
@@ -52,4 +60,10 @@ public enum MissFisherResumeKind
     FishLog,
     Album,
     Collection,
+}
+
+public enum IceJobSelectionStrategy
+{
+    LowestLevel,
+    JobOrder,
 }

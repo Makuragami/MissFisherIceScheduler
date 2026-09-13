@@ -54,6 +54,12 @@ public sealed class Plugin : IDalamudPlugin
     private DateTime iceRunStartedUtc;
     private DateTime suppressAutoUntilUtc;
     private string cycleOutcomeMessage = string.Empty;
+    private int activeIceGearsetId = -1;
+    private uint activeIceJobId;
+    private string activeIceJobName = string.Empty;
+    private readonly HashSet<uint> failedIceJobsThisCycle = [];
+    private bool rotatingIceJob;
+    private bool iceStopAfterCurrentOwned;
 
     public Plugin(IDalamudPluginInterface pluginInterface, ICommandManager commands, IFramework framework,
         ICondition condition, IClientState clientState, IPlayerState playerState, IDataManager dataManager,
@@ -70,10 +76,12 @@ public sealed class Plugin : IDalamudPlugin
         this.addonLifecycle = addonLifecycle;
         config = pluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         config.Checkpoint ??= new CycleCheckpoint();
+        config.ExcludedIceJobIds ??= [];
+        config.Checkpoint.FailedIceJobIds ??= [];
         ipc = new PluginIpc(pluginInterface, log);
         iceTravel = new IceTravelHelper(pluginInterface, clientState, condition, dataManager, gameGui, objects, log,
             message => AddUiLog("旅行", message));
-        gearsets = new GearsetHelper(playerState);
+        gearsets = new GearsetHelper(playerState, dataManager);
         commands.AddHandler(Command, new CommandInfo(OnCommand) { HelpMessage = "/mfice - 打开配置；enable | disable | abort | reset | status" });
         framework.Update += OnUpdate;
         pluginInterface.UiBuilder.Draw += Draw;
@@ -89,6 +97,7 @@ public sealed class Plugin : IDalamudPlugin
     public void Dispose()
     {
         if (iceOwned) ipc.TryDisableIce();
+        ClearOwnedIceStopAfterCurrent();
         if (testMode) ipc.TrySetIceStopAfterCurrent(false);
         framework.Update -= OnUpdate;
         pluginInterface.UiBuilder.Draw -= Draw;
@@ -181,8 +190,20 @@ public sealed class Plugin : IDalamudPlugin
 
     private bool StartCycle(DateTime now, double remainingSeconds, bool asTest)
     {
-        fisherGearsetId = gearsets.CurrentGearsetId;
-        if (fisherGearsetId is null) { Fail("无法读取当前捕鱼套装"); return false; }
+        var originalFisherGearset = gearsets.CurrentGearsetId;
+        if (originalFisherGearset is null) { Fail("无法读取当前捕鱼套装"); return false; }
+        failedIceJobsThisCycle.Clear();
+        rotatingIceJob = false;
+        iceStopAfterCurrentOwned = false;
+        if (!TrySelectNextIceJob(out var selectionError))
+        {
+            lastError = selectionError;
+            status = selectionError;
+            suppressAutoUntilUtc = now.AddMinutes(5);
+            AddUiLog("职业", selectionError);
+            return false;
+        }
+        fisherGearsetId = originalFisherGearset;
         windowStartUtc = asTest ? null : now.AddSeconds(remainingSeconds);
         cycleChecklistId = config.MissFisherChecklistId;
         cycleChecklistName = config.MissFisherChecklistName.Trim();
@@ -197,6 +218,48 @@ public sealed class Plugin : IDalamudPlugin
         commands.ProcessCommand("/mf pause");
         AddUiLog("测试", asTest ? "开始完整流程测试，已请求暂停 MissFisher" : $"检测到 {Format(remainingSeconds)} 空档，开始调度周期");
         Transition(SchedulerState.PausingFisher, asTest ? "完整测试：正在暂停 MissFisher" : "正在暂停 MissFisher");
+        return true;
+    }
+
+    private bool TrySelectNextIceJob(out string error)
+    {
+        error = string.Empty;
+        if (!config.AutoSelectIceJob)
+        {
+            if (config.IceGearsetId < 0)
+            {
+                activeIceGearsetId = gearsets.CurrentGearsetId ?? -1;
+                activeIceJobId = gearsets.CurrentJobId;
+                activeIceJobName = "当前职业";
+                if (activeIceGearsetId >= 0 && activeIceJobId is >= 8 and <= 18) return true;
+                error = "当前职业不是可用于 ICE 的生产/采集职业";
+                return false;
+            }
+            var selected = gearsets.GetIceGearsets().FirstOrDefault(x => x.GearsetId == config.IceGearsetId);
+            if (selected.GearsetId != config.IceGearsetId || selected.JobId == 0)
+            {
+                error = "配置的 ICE 套装不存在或不是生产/采集职业";
+                return false;
+            }
+            activeIceGearsetId = selected.GearsetId;
+            activeIceJobId = selected.JobId;
+            activeIceJobName = selected.Name;
+            return true;
+        }
+
+        var excluded = config.ExcludedIceJobIds.ToHashSet();
+        excluded.UnionWith(failedIceJobsThisCycle);
+        var candidate = gearsets.GetIceJobCandidates(Math.Clamp(config.IceJobLevelCap, 1, 100), excluded,
+            config.IncludeFisherInIceRotation, config.IceJobSelectionStrategy).FirstOrDefault();
+        if (candidate.JobId == 0)
+        {
+            error = $"没有等级低于 {config.IceJobLevelCap}、未排除且具有有效套装的生产/采集职业";
+            return false;
+        }
+        activeIceGearsetId = candidate.GearsetId;
+        activeIceJobId = candidate.JobId;
+        activeIceJobName = candidate.JobName;
+        AddUiLog("职业", $"选择 {candidate.JobName} Lv.{candidate.Level}（套装 {candidate.GearsetName}）");
         return true;
     }
 
@@ -324,20 +387,20 @@ public sealed class Plugin : IDalamudPlugin
 
     private void TickEquippingIce(DateTime now)
     {
-        if (config.IceGearsetId < 0)
+        if (activeIceGearsetId < 0)
         {
             Transition(SchedulerState.StartingIce, "保持当前职业，准备启动 ICE");
             return;
         }
-        var selected = gearsets.GetIceGearsets().FirstOrDefault(x => x.GearsetId == config.IceGearsetId);
-        if (selected.GearsetId == config.IceGearsetId && gearsets.CurrentJobId == selected.JobId)
+        var selected = gearsets.GetIceGearsets().FirstOrDefault(x => x.GearsetId == activeIceGearsetId);
+        if (selected.GearsetId == activeIceGearsetId && gearsets.CurrentJobId == activeIceJobId)
         {
-            Transition(SchedulerState.StartingIce, $"已切换至 {selected.Name}，准备启动 ICE");
+            Transition(SchedulerState.StartingIce, $"已切换至 {activeIceJobName}，准备启动 ICE");
             return;
         }
-        if (IsSafe() && gearsets.Equip(config.IceGearsetId))
+        if (IsSafe() && gearsets.Equip(activeIceGearsetId))
         {
-            status = $"正在切换 ICE 套装 {selected.Name}";
+            status = $"正在切换 ICE 套装 {selected.Name}（{activeIceJobName}）";
             return;
         }
         if (Elapsed(now) > TimeSpan.FromSeconds(30)) Fail("无法切换到配置的 ICE 套装");
@@ -377,6 +440,8 @@ public sealed class Plugin : IDalamudPlugin
             var remaining = Remaining(now);
             if (!config.Enabled || remaining <= config.RecoveryReserveMinutes * 60d)
             {
+                rotatingIceJob = false;
+                ClearOwnedIceStopAfterCurrent();
                 Transition(SchedulerState.StoppingIce, "接近钓鱼窗口，正在停止 ICE");
                 return;
             }
@@ -394,6 +459,12 @@ public sealed class Plugin : IDalamudPlugin
         }
         if (!ice.IsRunning)
         {
+            var currentLevel = activeIceJobId == 0 ? 0 : gearsets.GetJobLevel(activeIceJobId);
+            if (!testMode && (rotatingIceJob || (config.AutoSelectIceJob && currentLevel >= config.IceJobLevelCap)))
+            {
+                RotateIceJobOrRestore(now, $"{activeIceJobName} 已达到 Lv.{currentLevel}");
+                return;
+            }
             if (testMode && testMissionObserved)
             {
                 ipc.TrySetIceStopAfterCurrent(false);
@@ -402,7 +473,13 @@ public sealed class Plugin : IDalamudPlugin
             }
             else if (!testMissionObserved && now - iceRunStartedUtc < TimeSpan.FromSeconds(15))
             {
-                cycleOutcomeMessage = "ICE 启动后立即停止：Agenda 列表为空或当前没有可执行任务。请先在 ICE 的 Agenda 中添加至少一个可运行任务。";
+                if (!testMode && config.AutoSelectIceJob)
+                {
+                    failedIceJobsThisCycle.Add(activeIceJobId);
+                    RotateIceJobOrRestore(now, $"{activeIceJobName} 在 {GetRegionLabel(config.IceTerritoryId)} 未能领取练级任务", true);
+                    return;
+                }
+                cycleOutcomeMessage = "ICE 启动后立即停止：ICE 当前模式、区域或职业没有可执行任务。请检查 ICE 的模式与任务条件。";
                 lastError = cycleOutcomeMessage;
                 suppressAutoUntilUtc = now.AddMinutes(5);
                 if (testMode) ipc.TrySetIceStopAfterCurrent(false);
@@ -416,6 +493,34 @@ public sealed class Plugin : IDalamudPlugin
                 BeginRestore("ICE 已自行停止，正在恢复 MissFisher");
             }
             return;
+        }
+        if (!testMode && config.AutoSelectIceJob && activeIceJobId != 0)
+        {
+            var level = gearsets.GetJobLevel(activeIceJobId);
+            if (level >= config.IceJobLevelCap)
+            {
+                rotatingIceJob = true;
+                if (ice.CurrentMission != 0)
+                {
+                    if (!iceStopAfterCurrentOwned)
+                    {
+                        if (ipc.TrySetIceStopAfterCurrent(true))
+                        {
+                            iceStopAfterCurrentOwned = true;
+                            AddUiLog("职业", $"{activeIceJobName} 已达到 Lv.{level}，等待任务 {ice.CurrentMission} 完成后换职业");
+                        }
+                        else
+                        {
+                            Transition(SchedulerState.StoppingIce, $"{activeIceJobName} 已满级，无法设置任务后停止，正在直接停止 ICE");
+                            return;
+                        }
+                    }
+                    status = $"{activeIceJobName} 已达到 Lv.{level}；等待当前 ICE 任务 {ice.CurrentMission} 完成后切换职业";
+                    return;
+                }
+                Transition(SchedulerState.StoppingIce, $"{activeIceJobName} 已达到 Lv.{level}，正在切换下一个职业");
+                return;
+            }
         }
         if (testMode && !testMissionObserved && now - iceRunStartedUtc > TimeSpan.FromSeconds(Math.Clamp(config.TestMissionStartTimeoutSeconds, 15, 300)))
         {
@@ -442,17 +547,63 @@ public sealed class Plugin : IDalamudPlugin
         }
         if (ipc.TryGetIce(out var ice) && !ice.IsRunning)
         {
+            if (rotatingIceJob)
+            {
+                RotateIceJobOrRestore(now, $"{activeIceJobName} 已达到等级上限");
+                return;
+            }
             if (testMode) ipc.TrySetIceStopAfterCurrent(false);
             BeginRestore("ICE 已停止，正在恢复捕鱼职业");
             return;
         }
         if (Elapsed(now) > TimeSpan.FromSeconds(config.IceStopTimeoutSeconds))
+        {
+            rotatingIceJob = false;
+            ClearOwnedIceStopAfterCurrent();
             BeginRestore("ICE 停止确认超时，继续恢复捕鱼职业");
+        }
+    }
+
+    private void RotateIceJobOrRestore(DateTime now, string reason, bool unavailableInRegion = false)
+    {
+        iceOwned = false;
+        rotatingIceJob = false;
+        ClearOwnedIceStopAfterCurrent();
+        if (Remaining(now) <= config.RecoveryReserveMinutes * 60d + 60)
+        {
+            cycleOutcomeMessage = $"{reason}；钓鱼窗口临近，不再切换职业";
+            BeginRestore("钓鱼窗口临近，正在恢复 MissFisher");
+            return;
+        }
+        if (!TrySelectNextIceJob(out var error))
+        {
+            cycleOutcomeMessage = unavailableInRegion
+                ? $"当前区域没有其他可用练级职业：{error}"
+                : $"生产/采集职业轮换完成：{error}";
+            lastError = cycleOutcomeMessage;
+            suppressAutoUntilUtc = now.AddMinutes(30);
+            AddUiLog("职业", cycleOutcomeMessage);
+            BeginRestore("没有其他可用 ICE 练级职业，正在恢复 MissFisher");
+            return;
+        }
+        observedMissionId = 0;
+        testMissionObserved = false;
+        AddUiLog("职业", $"{reason}；准备切换到 {activeIceJobName}");
+        Transition(SchedulerState.EquippingIceJob, $"{reason}；准备切换到 {activeIceJobName}");
+    }
+
+    private void ClearOwnedIceStopAfterCurrent()
+    {
+        if (!iceStopAfterCurrentOwned) return;
+        ipc.TrySetIceStopAfterCurrent(false);
+        iceStopAfterCurrentOwned = false;
     }
 
     private void BeginRestore(string message)
     {
         iceOwned = false;
+        rotatingIceJob = false;
+        ClearOwnedIceStopAfterCurrent();
         Transition(SchedulerState.RestoringFisher, message);
     }
 
@@ -564,6 +715,12 @@ public sealed class Plugin : IDalamudPlugin
         testMode = false;
         testMissionObserved = false;
         observedMissionId = 0;
+        activeIceGearsetId = -1;
+        activeIceJobId = 0;
+        activeIceJobName = string.Empty;
+        failedIceJobsThisCycle.Clear();
+        rotatingIceJob = false;
+        ClearOwnedIceStopAfterCurrent();
         cycleOutcomeMessage = string.Empty;
         config.Checkpoint = new CycleCheckpoint();
         Save();
@@ -576,6 +733,7 @@ public sealed class Plugin : IDalamudPlugin
         log.Error("{Message}", message);
         AddUiLog("错误", message);
         if (testMode) ipc.TrySetIceStopAfterCurrent(false);
+        ClearOwnedIceStopAfterCurrent();
         if (iceOwned) ipc.TryDisableIce();
         if (fisherGearsetId is not null)
         {
@@ -595,6 +753,9 @@ public sealed class Plugin : IDalamudPlugin
         config.Checkpoint.FisherGearsetId = fisherGearsetId;
         config.Checkpoint.IceOwned = iceOwned;
         config.Checkpoint.TestMode = testMode;
+        config.Checkpoint.ActiveIceGearsetId = activeIceGearsetId;
+        config.Checkpoint.ActiveIceJobId = activeIceJobId;
+        config.Checkpoint.FailedIceJobIds = failedIceJobsThisCycle.ToList();
         config.Checkpoint.ChecklistId = cycleChecklistId;
         config.Checkpoint.ChecklistName = cycleChecklistName;
         config.Checkpoint.ResumeKind = cycleResumeKind;
@@ -609,6 +770,11 @@ public sealed class Plugin : IDalamudPlugin
         fisherGearsetId = cp.FisherGearsetId;
         iceOwned = cp.IceOwned;
         testMode = cp.TestMode;
+        activeIceGearsetId = cp.ActiveIceGearsetId;
+        activeIceJobId = cp.ActiveIceJobId;
+        failedIceJobsThisCycle.Clear();
+        failedIceJobsThisCycle.UnionWith(cp.FailedIceJobIds ?? []);
+        activeIceJobName = gearsets.GetIceJobs().FirstOrDefault(x => x.JobId == activeIceJobId).Name ?? string.Empty;
         cycleChecklistId = cp.ChecklistId;
         cycleChecklistName = cp.ChecklistName;
         cycleResumeKind = cp.ResumeKind;
@@ -698,6 +864,8 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
         cycleOutcomeMessage = emergency ? "调度已由用户停止" : cycleOutcomeMessage;
+        rotatingIceJob = false;
+        ClearOwnedIceStopAfterCurrent();
         if (state is SchedulerState.RunningIce or SchedulerState.StartingIce or SchedulerState.StoppingIce)
         {
             Transition(SchedulerState.StoppingIce, "调度已停止，正在停止 ICE");
@@ -765,6 +933,8 @@ public sealed class Plugin : IDalamudPlugin
             ImGui.TextUnformatted($"ICE：{(ice.IsRunning ? ice.State : "空闲")}；当前任务：{mission}");
         }
         else ImGui.TextUnformatted("ICE：IPC 不可用");
+        if (activeIceJobId != 0)
+            ImGui.TextUnformatted($"ICE 职业：{activeIceJobName} Lv.{gearsets.GetJobLevel(activeIceJobId)} / {config.IceJobLevelCap}");
         if (ipc.TryGetFisher(out var fisher))
             ImGui.TextUnformatted($"MissFisher：{(fisher.IsRunning ? (fisher.IsPaused ? "已暂停" : "运行中") : "空闲")}");
         ImGui.TextWrapped($"MissFisher 适配：{targetReader.Status}");
@@ -807,16 +977,54 @@ public sealed class Plugin : IDalamudPlugin
                 if (ImGui.Selectable(option.Item2, option.Item1 == territory)) { config.IceTerritoryId = option.Item1; Save(); }
             ImGui.EndCombo();
         }
-        var iceGearsets = gearsets.GetIceGearsets();
-        var selectedGearset = iceGearsets.FirstOrDefault(x => x.GearsetId == config.IceGearsetId);
-        var gearsetLabel = config.IceGearsetId < 0 ? "保持当前职业（捕鱼人）" : selectedGearset.Name ?? $"套装 {config.IceGearsetId}";
-        if (ImGui.BeginCombo("ICE 使用套装", gearsetLabel))
+        var autoJob = config.AutoSelectIceJob;
+        if (ImGui.Checkbox("自动选择未满级生产/采集职业", ref autoJob)) { config.AutoSelectIceJob = autoJob; Save(); }
+        if (autoJob)
         {
-            if (ImGui.Selectable("保持当前职业（捕鱼人）", config.IceGearsetId < 0)) { config.IceGearsetId = -1; Save(); }
-            foreach (var option in iceGearsets)
-                if (ImGui.Selectable($"{option.Name}（职业 {option.JobId}）", option.GearsetId == config.IceGearsetId))
-                { config.IceGearsetId = option.GearsetId; Save(); }
-            ImGui.EndCombo();
+            var levelCap = config.IceJobLevelCap;
+            if (ImGui.InputInt("ICE 职业等级上限", ref levelCap)) { config.IceJobLevelCap = Math.Clamp(levelCap, 1, 100); Save(); }
+            var includeFisher = config.IncludeFisherInIceRotation;
+            if (ImGui.Checkbox("职业轮换包含捕鱼人", ref includeFisher)) { config.IncludeFisherInIceRotation = includeFisher; Save(); }
+            var strategyLabel = config.IceJobSelectionStrategy == IceJobSelectionStrategy.LowestLevel ? "最低等级优先" : "职业顺序";
+            if (ImGui.BeginCombo("职业选择策略", strategyLabel))
+            {
+                if (ImGui.Selectable("最低等级优先", config.IceJobSelectionStrategy == IceJobSelectionStrategy.LowestLevel))
+                { config.IceJobSelectionStrategy = IceJobSelectionStrategy.LowestLevel; Save(); }
+                if (ImGui.Selectable("职业顺序", config.IceJobSelectionStrategy == IceJobSelectionStrategy.JobOrder))
+                { config.IceJobSelectionStrategy = IceJobSelectionStrategy.JobOrder; Save(); }
+                ImGui.EndCombo();
+            }
+            ImGui.TextUnformatted("排除职业：");
+            if (ImGui.BeginChild("ExcludedIceJobs", new Vector2(0, 115), true))
+            {
+                foreach (var job in gearsets.GetIceJobs())
+                {
+                    var excluded = config.ExcludedIceJobIds.Contains(job.JobId);
+                    if (ImGui.Checkbox($"{job.Name}  Lv.{job.Level}##icejob{job.JobId}", ref excluded))
+                    {
+                        if (excluded) config.ExcludedIceJobIds.Add(job.JobId);
+                        else config.ExcludedIceJobIds.RemoveAll(x => x == job.JobId);
+                        config.ExcludedIceJobIds = config.ExcludedIceJobIds.Distinct().Order().ToList();
+                        Save();
+                    }
+                }
+            }
+            ImGui.EndChild();
+            ImGui.TextWrapped("职业达到上限后会等待当前 ICE 任务完成，再切换下一个有效套装；当前区域无法领取任务的职业会在本周期自动跳过。");
+        }
+        else
+        {
+            var iceGearsets = gearsets.GetIceGearsets();
+            var selectedGearset = iceGearsets.FirstOrDefault(x => x.GearsetId == config.IceGearsetId);
+            var gearsetLabel = config.IceGearsetId < 0 ? "保持当前职业（捕鱼人）" : selectedGearset.Name ?? $"套装 {config.IceGearsetId}";
+            if (ImGui.BeginCombo("ICE 使用套装", gearsetLabel))
+            {
+                if (ImGui.Selectable("保持当前职业（捕鱼人）", config.IceGearsetId < 0)) { config.IceGearsetId = -1; Save(); }
+                foreach (var option in iceGearsets)
+                    if (ImGui.Selectable($"{option.Name}（职业 {option.JobId}）", option.GearsetId == config.IceGearsetId))
+                    { config.IceGearsetId = option.GearsetId; Save(); }
+                ImGui.EndCombo();
+            }
         }
         var travel = config.IceTravelCommand;
         var builtInTravel = config.UseBuiltInIceTravel;

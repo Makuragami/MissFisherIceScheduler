@@ -3,7 +3,7 @@
     "Author": "makuragami",
     "Name": "MissFisher ICE Scheduler",
     "InternalName": "MissFisherIceScheduler",
-    "AssemblyVersion": "0.1.18.0",
+    "AssemblyVersion": "0.1.19.0",
     "Description": "在 MissFisher 钓鱼等待间隙运行 ICE，并在下一目标窗口前恢复捕鱼。",
     "ApplicableVersion": "any",
     "RepoUrl": "https://github.com/Makuragami/MissFisherIceScheduler",
@@ -19,7 +19,7 @@
     "CanUnloadAsync": false,
     "Punchline": "协调 MissFisher 钓鱼间隙与 ICE 宇宙探索任务。",
     "AcceptsFeedback": true,
-    "ChangeLog": "# v0.1.18\n- ICE 目标区域支持憧憬湾、法恩娜、俄匊斯和奥克塞西亚，默认选择憧憬湾。\n- 自动操作 WKSPlanetSelect 切换星球，并在标题确认后点击移动。\n- 区分星球切换事件 param 1/2 与移动事件 param 7，避免学习结果被覆盖。\n\n# v0.1.17\n- 主界面调整为状态、配置、日志三页。\n- 增加完整流程测试：暂停捕鱼、进入 Auxesia、完成一个 ICE 任务后恢复捕鱼。\n- 读取 ICE 当前任务，并明确提示 Agenda 没有可执行任务的启动失败。\n- 增加内置运行日志与自动重试冷却。\n\n# v0.1.4\n- 最佳兔威洞改用稳定的以太之光 ID 175，避免中文译名差异导致无法传送。\n\n# v0.1.3\n- 内置最佳兔威洞月球入口流程，不再依赖 /tp 或快捷传送面板。\n- 复用 MissFisher 的实现方式，直接调用游戏传送服务、vnavmesh IPC 和游戏对象交互。\n- 自动推进入口对话和确认，并支持配置入口选项序号。\n\n# v0.1.2\n- 增加跨区步骤命令链，支持用 || 依次执行传送、寻路和入口交互。\n- 严格确认已进入所选 ICE 目标区域后才启动 ICE。\n\n# v0.1.1\n- 适配 MissFisher 2.4.0.0。\n- 更新当前目标窗口、内置分组、自定义合集和恢复启动入口。\n- 保留对 MissFisher 2.3.1.x 的兼容。\n\n# v0.1.0\n- 在 MissFisher 等待窗口期间启动 ICE。\n- 接近下一条鱼的窗口时停止 ICE。\n- 支持 ICE 区域、ICE 套装、传送命令和恢复目标配置。\n",
+    "ChangeLog": "# v0.1.19\n- 增加生产/采集职业自动轮换，默认选择最低等级且有有效套装的职业。\n- 当前职业达到等级上限后等待任务完成，再切换下一个职业并重启 ICE。\n- 当前区域无法领取练级任务时自动跳过该职业。\n- 增加等级上限、捕鱼人包含开关、选择策略和职业排除配置。\n\n# v0.1.18\n- ICE 目标区域支持憧憬湾、法恩娜、俄匊斯和奥克塞西亚，默认选择憧憬湾。\n- 自动操作 WKSPlanetSelect 切换星球，并在标题确认后点击移动。\n- 区分星球切换事件 param 1/2 与移动事件 param 7，避免学习结果被覆盖。\n\n# v0.1.17\n- 主界面调整为状态、配置、日志三页。\n- 增加完整流程测试：暂停捕鱼、进入 Auxesia、完成一个 ICE 任务后恢复捕鱼。\n- 读取 ICE 当前任务，并明确提示 Agenda 没有可执行任务的启动失败。\n- 增加内置运行日志与自动重试冷却。\n\n# v0.1.4\n- 最佳兔威洞改用稳定的以太之光 ID 175，避免中文译名差异导致无法传送。\n\n# v0.1.3\n- 内置最佳兔威洞月球入口流程，不再依赖 /tp 或快捷传送面板。\n- 复用 MissFisher 的实现方式，直接调用游戏传送服务、vnavmesh IPC 和游戏对象交互。\n- 自动推进入口对话和确认，并支持配置入口选项序号。\n\n# v0.1.2\n- 增加跨区步骤命令链，支持用 || 依次执行传送、寻路和入口交互。\n- 严格确认已进入所选 ICE 目标区域后才启动 ICE。\n\n# v0.1.1\n- 适配 MissFisher 2.4.0.0。\n- 更新当前目标窗口、内置分组、自定义合集和恢复启动入口。\n- 保留对 MissFisher 2.3.1.x 的兼容。\n\n# v0.1.0\n- 在 MissFisher 等待窗口期间启动 ICE。\n- 接近下一条鱼的窗口时停止 ICE。\n- 支持 ICE 区域、ICE 套装、传送命令和恢复目标配置。\n",
     "DownloadLinkInstall": "https://raw.githubusercontent.com/Makuragami/MissFisherIceScheduler/refs/heads/main/latest.zip",
     "DownloadLinkUpdate": "https://raw.githubusercontent.com/Makuragami/MissFisherIceScheduler/refs/heads/main/latest.zip"
   }
