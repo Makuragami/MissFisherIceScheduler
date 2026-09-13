@@ -45,13 +45,6 @@ internal sealed class GearsetHelper(IPlayerState playerState, IDataManager dataM
         return true;
     }
 
-    public unsafe bool SaveCurrentEquipment(int gearsetId)
-    {
-        var module = RaptureGearsetModule.Instance();
-        return module != null && module->IsValidGearset(gearsetId)
-            && module->CurrentGearsetIndex == gearsetId && module->UpdateGearset(gearsetId) == 0;
-    }
-
     public unsafe IReadOnlyList<GearsetOption> GetIceGearsets()
     {
         var result = new List<GearsetOption>();

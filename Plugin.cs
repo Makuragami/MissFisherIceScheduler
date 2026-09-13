@@ -406,9 +406,9 @@ public sealed class Plugin : IDalamudPlugin
         var selected = gearsets.GetIceGearsets().FirstOrDefault(x => x.GearsetId == activeIceGearsetId);
         if (selected.GearsetId == activeIceGearsetId && gearsets.CurrentJobId == activeIceJobId)
         {
-            if (config.OptimizeIceGearsetOnSwitch)
+            if (config.EquipRecommendedGearOnSwitch)
             {
-                Transition(SchedulerState.OptimizingIceGear, $"已切换至 {activeIceJobName}，准备选择最强装备并保存套装");
+                Transition(SchedulerState.OptimizingIceGear, $"已切换至 {activeIceJobName}，准备选择最强装备");
                 return;
             }
             Transition(SchedulerState.StartingIce, $"已切换至 {activeIceJobName}，准备启动 ICE");
@@ -433,7 +433,7 @@ public sealed class Plugin : IDalamudPlugin
 
         if (Elapsed(now) > TimeSpan.FromSeconds(30))
         {
-            Fail($"无法为 {activeIceJobName} 应用最强装备并保存套装");
+            Fail($"无法为 {activeIceJobName} 应用最强装备");
             return;
         }
         if (!IsSafe() || now < nextIceGearActionUtc) return;
@@ -455,9 +455,8 @@ public sealed class Plugin : IDalamudPlugin
                 AddUiLog("装备", status);
                 break;
             default:
-                if (!gearsets.SaveCurrentEquipment(activeIceGearsetId)) return;
-                AddUiLog("装备", $"已覆盖保存套装 {activeIceGearsetId}（{activeIceJobName}）");
-                Transition(SchedulerState.StartingIce, $"{activeIceJobName} 最强装备已保存，准备启动 ICE");
+                AddUiLog("装备", $"{activeIceJobName} 已穿上最强装备；未保存或覆盖套装 {activeIceGearsetId}");
+                Transition(SchedulerState.StartingIce, $"{activeIceJobName} 已穿上最强装备，准备启动 ICE");
                 break;
         }
     }
@@ -1102,9 +1101,9 @@ public sealed class Plugin : IDalamudPlugin
         }
         var autoJob = config.AutoSelectIceJob;
         if (ImGui.Checkbox("自动选择未满级生产/采集职业", ref autoJob)) { config.AutoSelectIceJob = autoJob; Save(); }
-        var optimizeGear = config.OptimizeIceGearsetOnSwitch;
-        if (ImGui.Checkbox("切换职业后选择最强装备并保存套装", ref optimizeGear))
-        { config.OptimizeIceGearsetOnSwitch = optimizeGear; Save(); }
+        var optimizeGear = config.EquipRecommendedGearOnSwitch;
+        if (ImGui.Checkbox("切换职业后穿上最强装备（不保存套装）", ref optimizeGear))
+        { config.EquipRecommendedGearOnSwitch = optimizeGear; Save(); }
         if (autoJob)
         {
             var levelCap = config.IceJobLevelCap;
