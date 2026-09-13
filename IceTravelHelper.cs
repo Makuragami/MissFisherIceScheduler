@@ -171,7 +171,16 @@ internal sealed class IceTravelHelper
         if (player is null)
             return false;
 
-        var destination = config.IceEntrancePosition;
+        var npc = FindEntranceNpc(config, player);
+        if (npc is null)
+        {
+            // The configured coordinates are map/UI coordinates, not world coordinates.
+            // Wait for the actual event NPC instead of sending an unreachable point to vnavmesh.
+            Status = $"等待入口 NPC：{config.IceEntranceNpcName}";
+            return false;
+        }
+
+        var destination = npc.Position;
         var distance = Vector3.Distance(player.Position, destination);
         if (distance <= 4.5f)
         {
@@ -196,6 +205,9 @@ internal sealed class IceTravelHelper
                 Status = "等待 vnavmesh 地图构建完成";
                 return false;
             }
+            log.Information("Built-in ICE travel: resolved NPC name={Name}, dataId={DataId}, worldPosition={Position}",
+                npc.Name, npc.BaseId, destination);
+            log.Information("Built-in ICE travel: vnav target NPC world position={Position}", destination);
             if (!moveTo.InvokeFunc(destination, false))
             {
                 error = "vnavmesh 未能开始前往架行威";
@@ -225,11 +237,7 @@ internal sealed class IceTravelHelper
         if (player is null)
             return false;
 
-        var npc = objects
-            .Where(x => x.IsTargetable && (x.ObjectKind is DalamudObjectKind.EventNpc or DalamudObjectKind.BattleNpc))
-            .Where(x => string.Equals(x.Name.ToString(), config.IceEntranceNpcName, StringComparison.Ordinal))
-            .OrderBy(x => Vector3.DistanceSquared(x.Position, player.Position))
-            .FirstOrDefault();
+        var npc = FindEntranceNpc(config, player);
         if (npc is null)
         {
             Status = $"在入口附近等待 NPC：{config.IceEntranceNpcName}";
@@ -246,6 +254,24 @@ internal sealed class IceTravelHelper
         TargetSystem.Instance()->InteractWithObject((ClientGameObject*)npc.Address, false);
         Status = $"正在与 {config.IceEntranceNpcName} 交互";
         return false;
+    }
+
+    private IGameObject? FindEntranceNpc(Configuration config, IGameObject player)
+    {
+        var configuredName = config.IceEntranceNpcName.Trim();
+        var aliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            configuredName,
+            "架行威",
+            "驾驶威",
+            "Drivingway",
+        };
+
+        return objects
+            .Where(x => x.IsTargetable && (x.ObjectKind is DalamudObjectKind.EventNpc or DalamudObjectKind.BattleNpc))
+            .Where(x => aliases.Contains(x.Name.ToString().Trim()))
+            .OrderBy(x => Vector3.DistanceSquared(x.Position, player.Position))
+            .FirstOrDefault();
     }
 
     private unsafe bool TryAdvanceTalk()
