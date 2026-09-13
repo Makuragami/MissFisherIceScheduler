@@ -3,7 +3,7 @@
     "Author": "makuragami",
     "Name": "MissFisher ICE Scheduler",
     "InternalName": "MissFisherIceScheduler",
-    "AssemblyVersion": "0.1.13.0",
+    "AssemblyVersion": "0.1.14.0",
     "Description": "在 MissFisher 钓鱼等待间隙运行 ICE，并在下一目标窗口前恢复捕鱼。",
     "ApplicableVersion": "any",
     "RepoUrl": "https://github.com/Makuragami/MissFisherIceScheduler",

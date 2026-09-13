@@ -465,14 +465,23 @@ internal sealed class IceTravelHelper
             return PlanetSelectAction.None;
 
         var texts = new List<string>();
+        var buttonCandidates = new List<string>();
         AtkComponentButton* moveButton = null;
+        AtkComponentButton* bottomButton = null;
+        var bottomButtonY = float.MinValue;
         var visitedManagers = new HashSet<nint>();
-        ScanPlanetUi(&addon->UldManager, texts, ref moveButton, visitedManagers);
+        ScanPlanetUi(&addon->UldManager, texts, buttonCandidates, ref moveButton,
+            ref bottomButton, ref bottomButtonY, visitedManagers);
+
+        // “移动”文本和按钮组件并非直接关联。文字定位失败时，使用该界面
+        // 最靠下的可见宽按钮；在 WKSPlanetSelect 中它就是底部移动键。
+        if (moveButton is null)
+            moveButton = bottomButton;
 
         if (!planetUiLogged)
         {
-            log.Information("Built-in ICE travel: WKSPlanetSelect visible, texts=[{Texts}], moveButtonFound={MoveFound}",
-                string.Join(" | ", texts.Distinct()), moveButton is not null);
+            log.Information("Built-in ICE travel: WKSPlanetSelect visible, texts=[{Texts}], buttons=[{Buttons}], moveButtonFound={MoveFound}",
+                string.Join(" | ", texts.Distinct()), string.Join(" | ", buttonCandidates), moveButton is not null);
             planetUiLogged = true;
         }
 
@@ -496,8 +505,9 @@ internal sealed class IceTravelHelper
         return PlanetSelectAction.ClickedMove;
     }
 
-    private unsafe void ScanPlanetUi(AtkUldManager* manager, List<string> texts,
-        ref AtkComponentButton* moveButton, HashSet<nint> visitedManagers)
+    private unsafe void ScanPlanetUi(AtkUldManager* manager, List<string> texts, List<string> buttonCandidates,
+        ref AtkComponentButton* moveButton, ref AtkComponentButton* bottomButton, ref float bottomButtonY,
+        HashSet<nint> visitedManagers)
     {
         if (manager is null || manager->NodeList is null || !visitedManagers.Add((nint)manager))
             return;
@@ -522,9 +532,15 @@ internal sealed class IceTravelHelper
             if (component is null)
                 continue;
 
-            if (component->GetComponentType() == ComponentType.Button)
+            var componentType = component->GetComponentType();
+            AtkComponentButton* button = null;
+            if (componentType == ComponentType.Button)
+                button = (AtkComponentButton*)component;
+            else if (componentType == ComponentType.HoldButton)
+                button = &((AtkComponentHoldButton*)component)->AtkComponentButton;
+
+            if (button is not null)
             {
-                var button = (AtkComponentButton*)component;
                 var buttonText = button->ButtonTextNode is null
                     ? string.Empty
                     : button->ButtonTextNode->NodeText.ToString().Trim();
@@ -533,9 +549,23 @@ internal sealed class IceTravelHelper
                 if (buttonText.Contains("移动", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(buttonText, "Move", StringComparison.OrdinalIgnoreCase))
                     moveButton = button;
+
+                var owner = button->AtkComponentBase.OwnerNode;
+                if (owner is not null)
+                {
+                    var res = &owner->AtkResNode;
+                    buttonCandidates.Add($"id={res->NodeId},type={componentType},text={buttonText},x={res->ScreenX:F0},y={res->ScreenY:F0},w={res->Width},h={res->Height},enabled={button->IsEnabled}");
+                    var bottom = res->ScreenY + res->Height;
+                    if (button->IsEnabled && res->Width >= 80 && res->Height >= 18 && bottom > bottomButtonY)
+                    {
+                        bottomButton = button;
+                        bottomButtonY = bottom;
+                    }
+                }
             }
 
-            ScanPlanetUi(&component->UldManager, texts, ref moveButton, visitedManagers);
+            ScanPlanetUi(&component->UldManager, texts, buttonCandidates, ref moveButton,
+                ref bottomButton, ref bottomButtonY, visitedManagers);
         }
     }
 
