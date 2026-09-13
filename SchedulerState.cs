@@ -4,6 +4,7 @@ internal enum SchedulerState
 {
     Idle,
     PausingFisher,
+    WaitingForFisherTravel,
     TravellingToIce,
     EquippingIceJob,
     StartingIce,

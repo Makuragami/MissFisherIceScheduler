@@ -41,6 +41,8 @@ public sealed class Plugin : IDalamudPlugin
     private string status = "等待启用";
     private string lastError = string.Empty;
     private bool windowOpen;
+    private uint settleTerritoryId;
+    private DateTime territoryStableSinceUtc;
 
     public Plugin(IDalamudPluginInterface pluginInterface, ICommandManager commands, IFramework framework,
         ICondition condition, IClientState clientState, IPlayerState playerState, IDataManager dataManager,
@@ -89,6 +91,7 @@ public sealed class Plugin : IDalamudPlugin
         {
             case SchedulerState.Idle: TickIdle(now, fisher); break;
             case SchedulerState.PausingFisher: TickPausing(now, fisher); break;
+            case SchedulerState.WaitingForFisherTravel: TickWaitingForFisherTravel(now, fisher); break;
             case SchedulerState.TravellingToIce: TickTravelling(now); break;
             case SchedulerState.EquippingIceJob: TickEquippingIce(now); break;
             case SchedulerState.StartingIce: TickStartingIce(now); break;
@@ -142,10 +145,66 @@ public sealed class Plugin : IDalamudPlugin
     {
         if (fisher.IsPaused || !fisher.IsRunning)
         {
-            Transition(SchedulerState.TravellingToIce, "MissFisher 已暂停，准备进入 ICE 区域");
+            settleTerritoryId = clientState.TerritoryType;
+            territoryStableSinceUtc = DateTime.MinValue;
+            Transition(SchedulerState.WaitingForFisherTravel, "MissFisher 已暂停，等待遗留传送完成");
             return;
         }
         if (Elapsed(now) > TimeSpan.FromSeconds(20)) Fail("MissFisher 暂停超时");
+    }
+
+    private void TickWaitingForFisherTravel(DateTime now, MissFisherSnapshot fisher)
+    {
+        if (fisher.IsRunning && !fisher.IsPaused)
+        {
+            if (!actionSent)
+            {
+                commands.ProcessCommand("/mf pause");
+                actionSent = true;
+            }
+            territoryStableSinceUtc = DateTime.MinValue;
+            status = "MissFisher 意外恢复，正在重新暂停";
+            return;
+        }
+
+        var currentTerritory = clientState.TerritoryType;
+        var betweenAreas = condition[ConditionFlag.BetweenAreas] || condition[ConditionFlag.BetweenAreas51];
+        var busy = betweenAreas || condition[ConditionFlag.Casting] || condition[ConditionFlag.Occupied]
+            || !playerState.IsLoaded;
+
+        if (currentTerritory != settleTerritoryId)
+        {
+            log.Information("MissFisher post-pause travel changed territory: {OldTerritory} -> {NewTerritory}",
+                settleTerritoryId, currentTerritory);
+            settleTerritoryId = currentTerritory;
+            territoryStableSinceUtc = DateTime.MinValue;
+        }
+
+        if (busy)
+        {
+            territoryStableSinceUtc = DateTime.MinValue;
+            status = betweenAreas
+                ? "MissFisher 已暂停；正在等待其遗留传送完成"
+                : "MissFisher 已暂停；等待角色结束咏唱或占用状态";
+            if (Elapsed(now) > TimeSpan.FromSeconds(60))
+                Fail("暂停 MissFisher 后，角色传送或占用状态超过 60 秒仍未结束");
+            return;
+        }
+
+        if (territoryStableSinceUtc == DateTime.MinValue)
+            territoryStableSinceUtc = now;
+
+        var graceRemaining = Math.Max(0, 12 - Elapsed(now).TotalSeconds);
+        var stableRemaining = Math.Max(0, 3 - (now - territoryStableSinceUtc).TotalSeconds);
+        if (graceRemaining > 0 || stableRemaining > 0)
+        {
+            status = $"MissFisher 已暂停；等待传送稳定 {Math.Ceiling(Math.Max(graceRemaining, stableRemaining))} 秒";
+            return;
+        }
+
+        log.Information("MissFisher post-pause travel settled: territory={Territory}, elapsed={Elapsed:F1}s",
+            currentTerritory, Elapsed(now).TotalSeconds);
+        Transition(SchedulerState.TravellingToIce, "MissFisher 遗留传送已结束，准备进入 ICE 区域");
     }
 
     private void TickTravelling(DateTime now)

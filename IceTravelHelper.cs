@@ -88,6 +88,7 @@ internal sealed class IceTravelHelper
 
     public void Reset()
     {
+        TryStopPath();
         phase = Phase.Resolving;
         entranceTerritoryId = 0;
         nextActionUtc = DateTime.MinValue;
@@ -466,12 +467,16 @@ internal sealed class IceTravelHelper
 
         var texts = new List<string>();
         var buttonCandidates = new List<string>();
+        var collisionCandidates = new List<string>();
         AtkComponentButton* moveButton = null;
         AtkComponentButton* bottomButton = null;
+        AtkCollisionNode* moveCollision = null;
         var bottomButtonY = float.MinValue;
+        var bottomCollisionY = float.MinValue;
         var visitedManagers = new HashSet<nint>();
         ScanPlanetUi(&addon->UldManager, texts, buttonCandidates, ref moveButton,
-            ref bottomButton, ref bottomButtonY, visitedManagers);
+            ref bottomButton, ref bottomButtonY, collisionCandidates, ref moveCollision,
+            ref bottomCollisionY, visitedManagers);
 
         // “移动”文本和按钮组件并非直接关联。文字定位失败时，使用该界面
         // 最靠下的可见宽按钮；在 WKSPlanetSelect 中它就是底部移动键。
@@ -480,8 +485,9 @@ internal sealed class IceTravelHelper
 
         if (!planetUiLogged)
         {
-            log.Information("Built-in ICE travel: WKSPlanetSelect visible, texts=[{Texts}], buttons=[{Buttons}], moveButtonFound={MoveFound}",
-                string.Join(" | ", texts.Distinct()), string.Join(" | ", buttonCandidates), moveButton is not null);
+            log.Information("Built-in ICE travel: WKSPlanetSelect visible, texts=[{Texts}], buttons=[{Buttons}], collisions=[{Collisions}], moveTargetFound={MoveFound}",
+                string.Join(" | ", texts.Distinct()), string.Join(" | ", buttonCandidates),
+                string.Join(" | ", collisionCandidates), moveButton is not null || moveCollision is not null);
             planetUiLogged = true;
         }
 
@@ -490,23 +496,35 @@ internal sealed class IceTravelHelper
                 || x.Contains("Auxesia", StringComparison.OrdinalIgnoreCase));
         if (!targetVisible)
             return PlanetSelectAction.WaitingForTarget;
-        if (moveButton is null)
+        if (moveButton is null && moveCollision is null)
             return PlanetSelectAction.WaitingForMoveButton;
 
-        var ownerNode = moveButton->AtkComponentBase.OwnerNode;
-        var clickEvent = ownerNode is null ? null : ownerNode->AtkResNode.AtkEventManager.Event;
+        AtkEvent* clickEvent;
+        AtkEvent* eventData;
+        if (moveButton is not null)
+        {
+            var ownerNode = moveButton->AtkComponentBase.OwnerNode;
+            eventData = ownerNode is null ? null : ownerNode->AtkResNode.AtkEventManager.Event;
+            clickEvent = ownerNode is null ? null : FindClickEvent(&ownerNode->AtkResNode);
+        }
+        else
+        {
+            eventData = moveCollision->AtkResNode.AtkEventManager.Event;
+            clickEvent = FindClickEvent(&moveCollision->AtkResNode);
+        }
         if (clickEvent is null)
         {
-            log.Warning("Built-in ICE travel: WKSPlanetSelect Move button has no click event");
-            return PlanetSelectAction.WaitingForTarget;
+            log.Warning("Built-in ICE travel: WKSPlanetSelect move target has no click event");
+            return PlanetSelectAction.WaitingForMoveButton;
         }
 
-        addon->ReceiveEvent(clickEvent->State.EventType, (int)clickEvent->Param, clickEvent, null);
+        addon->ReceiveEvent(clickEvent->State.EventType, (int)clickEvent->Param, eventData, null);
         return PlanetSelectAction.ClickedMove;
     }
 
     private unsafe void ScanPlanetUi(AtkUldManager* manager, List<string> texts, List<string> buttonCandidates,
         ref AtkComponentButton* moveButton, ref AtkComponentButton* bottomButton, ref float bottomButtonY,
+        List<string> collisionCandidates, ref AtkCollisionNode* moveCollision, ref float bottomCollisionY,
         HashSet<nint> visitedManagers)
     {
         if (manager is null || manager->NodeList is null || !visitedManagers.Add((nint)manager))
@@ -523,6 +541,23 @@ internal sealed class IceTravelHelper
                 var value = ((AtkTextNode*)node)->NodeText.ToString().Trim();
                 if (!string.IsNullOrEmpty(value))
                     texts.Add(value);
+                continue;
+            }
+
+            if (node->Type == NodeType.Collision)
+            {
+                var collision = (AtkCollisionNode*)node;
+                var click = FindClickEvent(&collision->AtkResNode);
+                if (click is not null)
+                {
+                    collisionCandidates.Add($"id={node->NodeId},param={click->Param},x={node->ScreenX:F0},y={node->ScreenY:F0},w={node->Width},h={node->Height}");
+                    var bottom = node->ScreenY + node->Height;
+                    if (node->Width >= 80 && node->Height >= 18 && bottom > bottomCollisionY)
+                    {
+                        moveCollision = collision;
+                        bottomCollisionY = bottom;
+                    }
+                }
                 continue;
             }
 
@@ -565,8 +600,19 @@ internal sealed class IceTravelHelper
             }
 
             ScanPlanetUi(&component->UldManager, texts, buttonCandidates, ref moveButton,
-                ref bottomButton, ref bottomButtonY, visitedManagers);
+                ref bottomButton, ref bottomButtonY, collisionCandidates, ref moveCollision,
+                ref bottomCollisionY, visitedManagers);
         }
+    }
+
+    private static unsafe AtkEvent* FindClickEvent(AtkResNode* node)
+    {
+        if (node is null)
+            return null;
+        for (var current = node->AtkEventManager.Event; current is not null; current = current->NextEvent)
+            if (current->State.EventType is AtkEventType.MouseClick or AtkEventType.ButtonClick)
+                return current;
+        return null;
     }
 
     private void TryStopPath()
