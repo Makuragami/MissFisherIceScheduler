@@ -11,7 +11,6 @@ public sealed class Plugin : IDalamudPlugin
 {
     private const string Command = "/mfice";
     private const uint FisherJobId = 18;
-    private static readonly HashSet<uint> IceTerritories = [1237, 1291, 1310, 1319];
     private readonly IDalamudPluginInterface pluginInterface;
     private readonly ICommandManager commands;
     private readonly IFramework framework;
@@ -151,7 +150,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void TickTravelling(DateTime now)
     {
-        if (clientState.TerritoryType == config.IceTerritoryId)
+        if (IceTravelHelper.IsIceTerritory(clientState.TerritoryType))
         {
             Transition(SchedulerState.EquippingIceJob, "已进入目标宇宙探索区域，准备切换 ICE 职业");
             return;

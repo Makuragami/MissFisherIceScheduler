@@ -20,6 +20,9 @@ namespace MissFisherIceScheduler;
 internal sealed class IceTravelHelper
 {
     private static readonly Vector3 EntranceWorldPosition = new(25.680908f, -137.41669f, -411.30695f);
+    private static readonly HashSet<uint> IceTerritories = [1237, 1291, 1310, 1319];
+
+    public static bool IsIceTerritory(uint territoryId) => IceTerritories.Contains(territoryId);
 
     private enum Phase
     {
@@ -77,7 +80,7 @@ internal sealed class IceTravelHelper
         error = null;
         try
         {
-            if (clientState.TerritoryType == config.IceTerritoryId)
+            if (IsIceTerritory(clientState.TerritoryType))
                 return true;
 
             return phase switch
@@ -153,6 +156,16 @@ internal sealed class IceTravelHelper
 
     private bool TickWaitForTeleport(DateTime now, Configuration config)
     {
+        if (now >= nextActionUtc)
+        {
+            phase = Phase.Resolving;
+            Status = $"传送请求未生效，正在重试 {config.IceEntranceAetheryteName}";
+            log.Warning("Built-in ICE travel: teleport did not complete within timeout; retrying, current={CurrentTerritory}, expected={ExpectedTerritory}, betweenAreas={BetweenAreas}",
+                clientState.TerritoryType, entranceTerritoryId,
+                condition[ConditionFlag.BetweenAreas] || condition[ConditionFlag.BetweenAreas51]);
+            return false;
+        }
+
         if (condition[ConditionFlag.BetweenAreas] || condition[ConditionFlag.BetweenAreas51])
         {
             Status = $"正在传送到 {config.IceEntranceAetheryteName}";
@@ -167,13 +180,6 @@ internal sealed class IceTravelHelper
             return false;
         }
 
-        if (now >= nextActionUtc)
-        {
-            phase = Phase.Resolving;
-            Status = $"传送请求未生效，正在重试 {config.IceEntranceAetheryteName}";
-            log.Warning("Built-in ICE travel: teleport did not change territory within timeout; retrying, current={CurrentTerritory}, expected={ExpectedTerritory}",
-                clientState.TerritoryType, entranceTerritoryId);
-        }
         return false;
     }
 
