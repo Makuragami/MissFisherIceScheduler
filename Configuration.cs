@@ -13,7 +13,10 @@ public sealed class Configuration : IPluginConfiguration
     public int IceStopTimeoutSeconds { get; set; } = 60;
     public uint IceTerritoryId { get; set; } = 1319;
     public int IceGearsetId { get; set; } = -1;
+    // Multiple external travel/interaction commands can be chained with "||".
     public string IceTravelCommand { get; set; } = string.Empty;
+    public int IceTravelStepDelaySeconds { get; set; } = 4;
+    public int IceTravelTimeoutSeconds { get; set; } = 180;
     public string MissFisherChecklistId { get; set; } = "ef950191-84e7-40ff-87ab-8d56f9d29572";
     public string MissFisherChecklistName { get; set; } = "新合集";
     public MissFisherResumeKind MissFisherResumeKind { get; set; } = MissFisherResumeKind.Collection;

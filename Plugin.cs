@@ -31,6 +31,9 @@ public sealed class Plugin : IDalamudPlugin
     private int? fisherGearsetId;
     private bool iceOwned;
     private bool actionSent;
+    private string[] travelCommands = [];
+    private int travelCommandIndex;
+    private DateTime nextTravelCommandUtc;
     private bool resumeSent;
     private string cycleChecklistId = string.Empty;
     private string cycleChecklistName = string.Empty;
@@ -145,25 +148,36 @@ public sealed class Plugin : IDalamudPlugin
 
     private void TickTravelling(DateTime now)
     {
-        if (IceTerritories.Contains(clientState.TerritoryType))
+        if (clientState.TerritoryType == config.IceTerritoryId)
         {
-            Transition(SchedulerState.EquippingIceJob, "已进入宇宙探索区域，准备切换 ICE 职业");
+            Transition(SchedulerState.EquippingIceJob, "已进入目标宇宙探索区域，准备切换 ICE 职业");
             return;
         }
         if (!actionSent)
         {
             if (string.IsNullOrWhiteSpace(config.IceTravelCommand))
             {
-                status = $"不在 ICE 区域；请进入区域 {config.IceTerritoryId} 或配置传送命令";
+                status = $"不在目标 ICE 区域 {config.IceTerritoryId}；请手动进入或配置传送/交互命令";
             }
             else
             {
-                commands.ProcessCommand(config.IceTravelCommand.Trim());
-                status = $"已执行 ICE 传送命令，等待进入区域 {config.IceTerritoryId}";
+                travelCommands = config.IceTravelCommand
+                    .Split("||", StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                travelCommandIndex = 0;
+                nextTravelCommandUtc = now;
+                status = $"准备执行 {travelCommands.Length} 个跨区步骤，目标区域 {config.IceTerritoryId}";
             }
             actionSent = true;
         }
-        if (Elapsed(now) > TimeSpan.FromMinutes(3)) Fail("三分钟内未进入 ICE 支持的宇宙探索区域");
+        if (travelCommandIndex < travelCommands.Length && now >= nextTravelCommandUtc)
+        {
+            commands.ProcessCommand(travelCommands[travelCommandIndex]);
+            travelCommandIndex++;
+            nextTravelCommandUtc = now.AddSeconds(Math.Clamp(config.IceTravelStepDelaySeconds, 1, 30));
+            status = $"已执行跨区步骤 {travelCommandIndex}/{travelCommands.Length}，等待入口交互或换图确认";
+        }
+        if (Elapsed(now) > TimeSpan.FromSeconds(Math.Clamp(config.IceTravelTimeoutSeconds, 30, 600)))
+            Fail($"未能在限定时间内进入目标 ICE 区域 {config.IceTerritoryId}");
     }
 
     private void TickEquippingIce(DateTime now)
@@ -440,7 +454,8 @@ public sealed class Plugin : IDalamudPlugin
             ImGui.EndCombo();
         }
         var travel = config.IceTravelCommand;
-        if (ImGui.InputText("进入 ICE 区域前命令", ref travel, 256)) { config.IceTravelCommand = travel; Save(); }
+        if (ImGui.InputText("跨区步骤命令（用 || 分隔）", ref travel, 2048)) { config.IceTravelCommand = travel; Save(); }
+        ImGui.TextWrapped("步骤示例：传送到入口 || 前往入口 || 与入口交互。命令由已安装的传送/任务插件执行；调度器会逐步发送并确认目标区域。");
 
         if (targetReader.TryGetResumeOptions(out var options))
         {
