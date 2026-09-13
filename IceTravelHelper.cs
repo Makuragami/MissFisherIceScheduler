@@ -9,6 +9,7 @@ using FFXIVClientStructs.FFXIV.Client.Game.Control;
 using FFXIVClientStructs.FFXIV.Client.Game.Object;
 using FFXIVClientStructs.FFXIV.Client.Game.UI;
 using FFXIVClientStructs.FFXIV.Client.UI;
+using FFXIVClientStructs.FFXIV.Component.GUI;
 using Lumina.Excel.Sheets;
 using System.Numerics;
 using ClientGameObject = FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject;
@@ -39,6 +40,13 @@ internal sealed class IceTravelHelper
         SelectedDestination,
     }
 
+    private enum PlanetSelectAction
+    {
+        None,
+        WaitingForTarget,
+        ClickedMove,
+    }
+
     private readonly IClientState clientState;
     private readonly ICondition condition;
     private readonly IDataManager dataManager;
@@ -58,6 +66,7 @@ internal sealed class IceTravelHelper
     private DateTime areaMenuRequestUtc;
     private bool moveRequested;
     private bool areaMenuRequested;
+    private bool planetUiLogged;
 
     public IceTravelHelper(IDalamudPluginInterface pi, IClientState clientState, ICondition condition,
         IDataManager dataManager, IGameGui gameGui, IObjectTable objects, IPluginLog log)
@@ -86,6 +95,7 @@ internal sealed class IceTravelHelper
         areaMenuRequestUtc = DateTime.MinValue;
         moveRequested = false;
         areaMenuRequested = false;
+        planetUiLogged = false;
     }
 
     public bool Tick(DateTime now, Configuration config, out string? error)
@@ -292,6 +302,21 @@ internal sealed class IceTravelHelper
             log.Warning("Built-in ICE travel: entrance selection did not change territory; retrying NPC interaction");
         }
 
+        var planetAction = TryHandlePlanetSelect(config.IceTerritoryId);
+        if (planetAction == PlanetSelectAction.ClickedMove)
+        {
+            entranceSelectionUtc = now;
+            Status = "已在目的地界面选择奥克塞西亚并点击移动，等待换区";
+            log.Information("Built-in ICE travel: clicked WKSPlanetSelect Move for targetTerritory={Territory}",
+                config.IceTerritoryId);
+            return false;
+        }
+        if (planetAction == PlanetSelectAction.WaitingForTarget)
+        {
+            Status = "目的地界面当前不是奥克塞西亚，等待选择目标";
+            return false;
+        }
+
         var selectAction = TrySelectString(config.IceTerritoryId, out var selectedIndex, out var entryCount);
         if (selectAction == SelectStringAction.OpenedAreaMenu)
         {
@@ -425,6 +450,69 @@ internal sealed class IceTravelHelper
             return false;
         addon->AtkUnitBase.FireCallbackInt(0);
         return true;
+    }
+
+    private unsafe PlanetSelectAction TryHandlePlanetSelect(uint targetTerritoryId)
+    {
+        var addon = (AtkUnitBase*)gameGui.GetAddonByName("WKSPlanetSelect", 1).Address;
+        if (addon is null || !addon->IsVisible || !addon->IsReady)
+            return PlanetSelectAction.None;
+
+        var texts = new List<string>();
+        AtkComponentButton* moveButton = null;
+        for (var i = 0; i < addon->UldManager.NodeListCount; i++)
+        {
+            var node = addon->UldManager.NodeList[i];
+            if (node is null || !node->IsVisible())
+                continue;
+
+            if (node->Type == NodeType.Text)
+            {
+                var value = ((AtkTextNode*)node)->NodeText.ToString().Trim();
+                if (!string.IsNullOrEmpty(value))
+                    texts.Add(value);
+                continue;
+            }
+
+            if (node->Type != NodeType.Component)
+                continue;
+            var component = ((AtkComponentNode*)node)->Component;
+            if (component is null || component->GetComponentType() != ComponentType.Button)
+                continue;
+            var button = (AtkComponentButton*)component;
+            var buttonText = button->ButtonTextNode is null
+                ? string.Empty
+                : button->ButtonTextNode->NodeText.ToString().Trim();
+            if (!string.IsNullOrEmpty(buttonText))
+                texts.Add(buttonText);
+            if (buttonText.Contains("移动", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(buttonText, "Move", StringComparison.OrdinalIgnoreCase))
+                moveButton = button;
+        }
+
+        if (!planetUiLogged)
+        {
+            log.Information("Built-in ICE travel: WKSPlanetSelect visible, texts=[{Texts}], moveButtonFound={MoveFound}",
+                string.Join(" | ", texts.Distinct()), moveButton is not null);
+            planetUiLogged = true;
+        }
+
+        var targetVisible = targetTerritoryId == 1319
+            && texts.Any(x => x.Contains("奥克塞西亚", StringComparison.OrdinalIgnoreCase)
+                || x.Contains("Auxesia", StringComparison.OrdinalIgnoreCase));
+        if (!targetVisible || moveButton is null)
+            return PlanetSelectAction.WaitingForTarget;
+
+        var ownerNode = moveButton->AtkComponentBase.OwnerNode;
+        var clickEvent = ownerNode is null ? null : ownerNode->AtkResNode.AtkEventManager.Event;
+        if (clickEvent is null)
+        {
+            log.Warning("Built-in ICE travel: WKSPlanetSelect Move button has no click event");
+            return PlanetSelectAction.WaitingForTarget;
+        }
+
+        addon->ReceiveEvent(clickEvent->State.EventType, (int)clickEvent->Param, clickEvent, null);
+        return PlanetSelectAction.ClickedMove;
     }
 
     private void TryStopPath()

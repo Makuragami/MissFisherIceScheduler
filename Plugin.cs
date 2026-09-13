@@ -483,7 +483,7 @@ public sealed class Plugin : IDalamudPlugin
         if (builtInTravel)
         {
             ImGui.TextWrapped("自动传送到最佳兔威洞，使用 vnavmesh 前往驾行威并确认进入。无需快捷传送面板。");
-            ImGui.TextWrapped("入口菜单会根据 ICE 目标区域自动选择；Auxesia 对应第 4 项。");
+            ImGui.TextWrapped("与驾行威交互后会打开专用目的地界面；目标为 Auxesia 时，确认显示奥克塞西亚行星后自动点击“移动”。");
         }
         else
         {
