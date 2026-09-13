@@ -41,6 +41,7 @@ internal sealed class IceTravelHelper
     private Phase phase;
     private uint entranceTerritoryId;
     private DateTime nextActionUtc;
+    private DateTime nextNpcScanLogUtc;
     private bool moveRequested;
 
     public IceTravelHelper(IDalamudPluginInterface pi, IClientState clientState, ICondition condition,
@@ -65,6 +66,7 @@ internal sealed class IceTravelHelper
         phase = Phase.Resolving;
         entranceTerritoryId = 0;
         nextActionUtc = DateTime.MinValue;
+        nextNpcScanLogUtc = DateTime.MinValue;
         moveRequested = false;
     }
 
@@ -177,6 +179,18 @@ internal sealed class IceTravelHelper
             // The configured coordinates are map/UI coordinates, not world coordinates.
             // Wait for the actual event NPC instead of sending an unreachable point to vnavmesh.
             Status = $"等待入口 NPC：{config.IceEntranceNpcName}";
+            if (now >= nextNpcScanLogUtc)
+            {
+                var nearby = objects
+                    .Where(x => Vector3.DistanceSquared(x.Position, player.Position) <= 10000f)
+                    .Where(x => x.ObjectKind is DalamudObjectKind.EventNpc or DalamudObjectKind.BattleNpc or DalamudObjectKind.EventObject)
+                    .Take(30)
+                    .Select(x => $"{x.Name} kind={x.ObjectKind} baseId={x.BaseId} targetable={x.IsTargetable} pos={x.Position}")
+                    .ToArray();
+                log.Information("Built-in ICE travel: entrance NPC not resolved; nearby objects: {Objects}",
+                    nearby.Length == 0 ? "<none>" : string.Join(" | ", nearby));
+                nextNpcScanLogUtc = now.AddSeconds(5);
+            }
             return false;
         }
 
