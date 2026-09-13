@@ -304,7 +304,7 @@ internal sealed class IceTravelHelper
             log.Warning("Built-in ICE travel: entrance selection did not change territory; retrying NPC interaction");
         }
 
-        var planetAction = TryHandlePlanetSelect(config.IceTerritoryId);
+        var planetAction = TryHandlePlanetSelect(config);
         if (planetAction == PlanetSelectAction.ClickedMove)
         {
             entranceSelectionUtc = now;
@@ -320,7 +320,7 @@ internal sealed class IceTravelHelper
         }
         if (planetAction == PlanetSelectAction.WaitingForMoveButton)
         {
-            Status = "已识别奥克塞西亚，正在定位“移动”按钮";
+            Status = "已识别奥克塞西亚；请手动点击一次“移动”以学习国服界面事件";
             return false;
         }
 
@@ -459,7 +459,7 @@ internal sealed class IceTravelHelper
         return true;
     }
 
-    private unsafe PlanetSelectAction TryHandlePlanetSelect(uint targetTerritoryId)
+    private unsafe PlanetSelectAction TryHandlePlanetSelect(Configuration config)
     {
         var addon = (AtkUnitBase*)gameGui.GetAddonByName("WKSPlanetSelect", 1).Address;
         if (addon is null || !addon->IsVisible || !addon->IsReady)
@@ -491,11 +491,37 @@ internal sealed class IceTravelHelper
             planetUiLogged = true;
         }
 
-        var targetVisible = targetTerritoryId == 1319
+        var targetVisible = config.IceTerritoryId == 1319
             && texts.Any(x => x.Contains("奥克塞西亚", StringComparison.OrdinalIgnoreCase)
                 || x.Contains("Auxesia", StringComparison.OrdinalIgnoreCase));
         if (!targetVisible)
             return PlanetSelectAction.WaitingForTarget;
+
+        if (config.PlanetMoveEventType >= 0 && config.PlanetMoveEventParam >= 0)
+        {
+            var capturedType = (AtkEventType)config.PlanetMoveEventType;
+            var capturedNode = config.PlanetMoveEventNodeId == 0
+                ? null
+                : addon->GetNodeById(config.PlanetMoveEventNodeId);
+            var capturedEvent = capturedNode is null ? null : FindEvent(capturedNode, capturedType, config.PlanetMoveEventParam);
+            if (capturedEvent is not null)
+            {
+                addon->ReceiveEvent(capturedType, config.PlanetMoveEventParam,
+                    capturedNode->AtkEventManager.Event, null);
+            }
+            else
+            {
+                var syntheticEvent = default(AtkEvent);
+                syntheticEvent.State.EventType = capturedType;
+                syntheticEvent.Param = (uint)config.PlanetMoveEventParam;
+                syntheticEvent.Node = capturedNode;
+                addon->ReceiveEvent(capturedType, config.PlanetMoveEventParam, &syntheticEvent, null);
+            }
+            log.Information("Built-in ICE travel: replayed captured WKSPlanetSelect event type={Type}, param={Param}, nodeId={NodeId}",
+                config.PlanetMoveEventType, config.PlanetMoveEventParam, config.PlanetMoveEventNodeId);
+            return PlanetSelectAction.ClickedMove;
+        }
+
         if (moveButton is null && moveCollision is null)
             return PlanetSelectAction.WaitingForMoveButton;
 
@@ -611,6 +637,16 @@ internal sealed class IceTravelHelper
             return null;
         for (var current = node->AtkEventManager.Event; current is not null; current = current->NextEvent)
             if (current->State.EventType is AtkEventType.MouseClick or AtkEventType.ButtonClick)
+                return current;
+        return null;
+    }
+
+    private static unsafe AtkEvent* FindEvent(AtkResNode* node, AtkEventType eventType, int eventParam)
+    {
+        if (node is null)
+            return null;
+        for (var current = node->AtkEventManager.Event; current is not null; current = current->NextEvent)
+            if (current->State.EventType == eventType && current->Param == (uint)eventParam)
                 return current;
         return null;
     }

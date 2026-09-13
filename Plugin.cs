@@ -1,4 +1,6 @@
 using Dalamud.Bindings.ImGui;
+using Dalamud.Game.Addon.Lifecycle;
+using Dalamud.Game.Addon.Lifecycle.AddonArgTypes;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.Command;
 using Dalamud.Plugin;
@@ -18,6 +20,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly IClientState clientState;
     private readonly IPlayerState playerState;
     private readonly IPluginLog log;
+    private readonly IAddonLifecycle addonLifecycle;
     private readonly PluginIpc ipc;
     private readonly GearsetHelper gearsets;
     private readonly MissFisherTargetReader targetReader = new();
@@ -46,6 +49,7 @@ public sealed class Plugin : IDalamudPlugin
 
     public Plugin(IDalamudPluginInterface pluginInterface, ICommandManager commands, IFramework framework,
         ICondition condition, IClientState clientState, IPlayerState playerState, IDataManager dataManager,
+        IAddonLifecycle addonLifecycle,
         IGameGui gameGui, IObjectTable objects, IPluginLog log)
     {
         this.pluginInterface = pluginInterface;
@@ -55,6 +59,7 @@ public sealed class Plugin : IDalamudPlugin
         this.clientState = clientState;
         this.playerState = playerState;
         this.log = log;
+        this.addonLifecycle = addonLifecycle;
         config = pluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         config.Checkpoint ??= new CycleCheckpoint();
         ipc = new PluginIpc(pluginInterface, log);
@@ -65,6 +70,7 @@ public sealed class Plugin : IDalamudPlugin
         pluginInterface.UiBuilder.Draw += Draw;
         pluginInterface.UiBuilder.OpenConfigUi += Open;
         pluginInterface.UiBuilder.OpenMainUi += Open;
+        addonLifecycle.RegisterListener(AddonEvent.PreReceiveEvent, "WKSPlanetSelect", OnPlanetSelectReceiveEvent);
         ReconcileCheckpoint();
     }
 
@@ -77,6 +83,7 @@ public sealed class Plugin : IDalamudPlugin
         pluginInterface.UiBuilder.Draw -= Draw;
         pluginInterface.UiBuilder.OpenConfigUi -= Open;
         pluginInterface.UiBuilder.OpenMainUi -= Open;
+        addonLifecycle.UnregisterListener(AddonEvent.PreReceiveEvent, "WKSPlanetSelect", OnPlanetSelectReceiveEvent);
         commands.RemoveHandler(Command);
     }
 
@@ -101,6 +108,30 @@ public sealed class Plugin : IDalamudPlugin
             case SchedulerState.ResumingFisher: TickResuming(now, fisher); break;
             case SchedulerState.RestartingFisher: TickRestarting(now, fisher); break;
         }
+    }
+
+    private unsafe void OnPlanetSelectReceiveEvent(AddonEvent _, AddonArgs args)
+    {
+        if (state != SchedulerState.TravellingToIce || args is not AddonReceiveEventArgs receive)
+            return;
+
+        var eventType = (int)receive.AtkEventType;
+        var eventPtr = (FFXIVClientStructs.FFXIV.Component.GUI.AtkEvent*)receive.AtkEvent;
+        var nodeId = eventPtr is null || eventPtr->Node is null ? 0u : eventPtr->Node->NodeId;
+        log.Information("WKSPlanetSelect user event: type={Type}({TypeId}), param={Param}, nodeId={NodeId}",
+            receive.AtkEventType, eventType, receive.EventParam, nodeId);
+
+        if (eventType is not ((int)FFXIVClientStructs.FFXIV.Component.GUI.AtkEventType.MouseClick)
+            and not ((int)FFXIVClientStructs.FFXIV.Component.GUI.AtkEventType.ButtonClick)
+            and not ((int)FFXIVClientStructs.FFXIV.Component.GUI.AtkEventType.DialogueSubmit))
+            return;
+
+        config.PlanetMoveEventType = eventType;
+        config.PlanetMoveEventParam = receive.EventParam;
+        config.PlanetMoveEventNodeId = nodeId;
+        Save();
+        log.Information("Captured WKSPlanetSelect Move event: type={TypeId}, param={Param}, nodeId={NodeId}",
+            eventType, receive.EventParam, nodeId);
     }
 
     private void TickIdle(DateTime now, MissFisherSnapshot fisher)

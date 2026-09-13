@@ -20,6 +20,9 @@ public sealed class Configuration : IPluginConfiguration
     public Vector3 IceEntrancePosition { get; set; } = new(25.680908f, -137.41669f, -411.30695f);
     public string IceEntranceNpcName { get; set; } = "驾行威";
     public int IceEntranceOptionIndex { get; set; }
+    public int PlanetMoveEventType { get; set; } = -1;
+    public int PlanetMoveEventParam { get; set; } = -1;
+    public uint PlanetMoveEventNodeId { get; set; }
     // Multiple external travel/interaction commands can be chained with "||".
     public string IceTravelCommand { get; set; } = string.Empty;
     public int IceTravelStepDelaySeconds { get; set; } = 4;
