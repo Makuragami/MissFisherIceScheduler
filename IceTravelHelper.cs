@@ -277,6 +277,7 @@ internal sealed class IceTravelHelper
         {
             configuredName,
             "架行威",
+            "驾行威",
             "驾驶威",
             "Drivingway",
         };
