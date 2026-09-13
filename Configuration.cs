@@ -15,6 +15,7 @@ public sealed class Configuration : IPluginConfiguration
     public uint IceTerritoryId { get; set; } = 1319;
     public int IceGearsetId { get; set; } = -1;
     public bool UseBuiltInIceTravel { get; set; } = true;
+    public uint IceEntranceAetheryteId { get; set; } = 175;
     public string IceEntranceAetheryteName { get; set; } = "最佳兔威洞";
     public Vector3 IceEntrancePosition { get; set; } = new(21.9f, 13.2f, -1.4f);
     public string IceEntranceNpcName { get; set; } = "架行威";

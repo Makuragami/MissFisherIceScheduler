@@ -96,7 +96,17 @@ internal sealed class IceTravelHelper
     private unsafe bool TickResolveAndTeleport(DateTime now, Configuration config, out string? error)
     {
         error = null;
-        var match = dataManager.GetExcelSheet<SheetAetheryte>()
+        var aetherytes = dataManager.GetExcelSheet<SheetAetheryte>();
+        var match = aetherytes
+            .Where(x => x.IsAetheryte)
+            .Select(x => new
+            {
+                Row = x,
+                Place = x.PlaceName.ValueNullable?.Name.ToString() ?? string.Empty,
+                Network = x.AethernetName.ValueNullable?.Name.ToString() ?? string.Empty,
+            })
+            .FirstOrDefault(x => x.Row.RowId == config.IceEntranceAetheryteId);
+        match ??= aetherytes
             .Where(x => x.IsAetheryte)
             .Select(x => new
             {
@@ -109,7 +119,7 @@ internal sealed class IceTravelHelper
 
         if (match is null)
         {
-            error = $"找不到以太之光：{config.IceEntranceAetheryteName}";
+            error = $"找不到入口以太之光：ID {config.IceEntranceAetheryteId} / {config.IceEntranceAetheryteName}";
             return false;
         }
 
