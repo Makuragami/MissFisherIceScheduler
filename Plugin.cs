@@ -64,6 +64,8 @@ public sealed class Plugin : IDalamudPlugin
     private DateTime nextIceStopRetryUtc;
     private DateTime? stopConfirmedSinceUtc;
     private bool stopTimeoutLogged;
+    private int iceGearOptimizationStep;
+    private DateTime nextIceGearActionUtc;
 
     public Plugin(IDalamudPluginInterface pluginInterface, ICommandManager commands, IFramework framework,
         ICondition condition, IClientState clientState, IPlayerState playerState, IDataManager dataManager,
@@ -129,6 +131,7 @@ public sealed class Plugin : IDalamudPlugin
             case SchedulerState.WaitingForFisherTravel: TickWaitingForFisherTravel(now, fisher); break;
             case SchedulerState.TravellingToIce: TickTravelling(now); break;
             case SchedulerState.EquippingIceJob: TickEquippingIce(now); break;
+            case SchedulerState.OptimizingIceGear: TickOptimizingIceGear(now); break;
             case SchedulerState.StartingIce: TickStartingIce(now); break;
             case SchedulerState.RunningIce: TickRunningIce(now); break;
             case SchedulerState.StoppingIce: TickStoppingIce(now); break;
@@ -403,6 +406,11 @@ public sealed class Plugin : IDalamudPlugin
         var selected = gearsets.GetIceGearsets().FirstOrDefault(x => x.GearsetId == activeIceGearsetId);
         if (selected.GearsetId == activeIceGearsetId && gearsets.CurrentJobId == activeIceJobId)
         {
+            if (config.OptimizeIceGearsetOnSwitch)
+            {
+                Transition(SchedulerState.OptimizingIceGear, $"已切换至 {activeIceJobName}，准备选择最强装备并保存套装");
+                return;
+            }
             Transition(SchedulerState.StartingIce, $"已切换至 {activeIceJobName}，准备启动 ICE");
             return;
         }
@@ -412,6 +420,46 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
         if (Elapsed(now) > TimeSpan.FromSeconds(30)) Fail("无法切换到配置的 ICE 套装");
+    }
+
+    private void TickOptimizingIceGear(DateTime now)
+    {
+        if (activeIceGearsetId < 0 || gearsets.CurrentGearsetId != activeIceGearsetId
+            || gearsets.CurrentJobId != activeIceJobId)
+        {
+            Transition(SchedulerState.EquippingIceJob, "职业或套装状态发生变化，正在重新切换 ICE 套装");
+            return;
+        }
+
+        if (Elapsed(now) > TimeSpan.FromSeconds(30))
+        {
+            Fail($"无法为 {activeIceJobName} 应用最强装备并保存套装");
+            return;
+        }
+        if (!IsSafe() || now < nextIceGearActionUtc) return;
+
+        switch (iceGearOptimizationStep)
+        {
+            case 0:
+                if (!gearsets.SetupRecommendedGear(activeIceJobId)) return;
+                iceGearOptimizationStep = 1;
+                nextIceGearActionUtc = now.AddSeconds(1);
+                status = $"正在计算 {activeIceJobName} 的最强装备";
+                AddUiLog("装备", status);
+                break;
+            case 1:
+                if (gearsets.RecommendedGearIsUpdating() || !gearsets.EquipRecommendedGear()) return;
+                iceGearOptimizationStep = 2;
+                nextIceGearActionUtc = now.AddSeconds(1.5);
+                status = $"已为 {activeIceJobName} 选择最强装备，等待装备状态稳定";
+                AddUiLog("装备", status);
+                break;
+            default:
+                if (!gearsets.SaveCurrentEquipment(activeIceGearsetId)) return;
+                AddUiLog("装备", $"已覆盖保存套装 {activeIceGearsetId}（{activeIceJobName}）");
+                Transition(SchedulerState.StartingIce, $"{activeIceJobName} 最强装备已保存，准备启动 ICE");
+                break;
+        }
     }
 
     private void TickStartingIce(DateTime now)
@@ -767,6 +815,11 @@ public sealed class Plugin : IDalamudPlugin
             stopConfirmedSinceUtc = null;
             stopTimeoutLogged = false;
         }
+        if (next == SchedulerState.OptimizingIceGear)
+        {
+            iceGearOptimizationStep = 0;
+            nextIceGearActionUtc = DateTime.MinValue;
+        }
         status = message;
         SaveCheckpoint();
         log.Information("State -> {State}: {Message}", next, message);
@@ -1049,6 +1102,9 @@ public sealed class Plugin : IDalamudPlugin
         }
         var autoJob = config.AutoSelectIceJob;
         if (ImGui.Checkbox("自动选择未满级生产/采集职业", ref autoJob)) { config.AutoSelectIceJob = autoJob; Save(); }
+        var optimizeGear = config.OptimizeIceGearsetOnSwitch;
+        if (ImGui.Checkbox("切换职业后选择最强装备并保存套装", ref optimizeGear))
+        { config.OptimizeIceGearsetOnSwitch = optimizeGear; Save(); }
         if (autoJob)
         {
             var levelCap = config.IceJobLevelCap;

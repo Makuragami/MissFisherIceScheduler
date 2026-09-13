@@ -7,6 +7,7 @@ internal enum SchedulerState
     WaitingForFisherTravel,
     TravellingToIce,
     EquippingIceJob,
+    OptimizingIceGear,
     StartingIce,
     RunningIce,
     StoppingIce,

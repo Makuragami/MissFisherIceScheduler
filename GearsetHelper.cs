@@ -23,6 +23,35 @@ internal sealed class GearsetHelper(IPlayerState playerState, IDataManager dataM
         return module != null && module->IsValidGearset(id) && module->EquipGearset(id) == 0;
     }
 
+    public unsafe bool SetupRecommendedGear(uint jobId)
+    {
+        var module = RecommendEquipModule.Instance();
+        if (module == null || jobId is 0 or > byte.MaxValue) return false;
+        module->SetupForClassJob((byte)jobId);
+        return true;
+    }
+
+    public unsafe bool RecommendedGearIsUpdating()
+    {
+        var module = RecommendEquipModule.Instance();
+        return module != null && module->IsUpdating;
+    }
+
+    public unsafe bool EquipRecommendedGear()
+    {
+        var module = RecommendEquipModule.Instance();
+        if (module == null || module->IsUpdating) return false;
+        module->EquipRecommendedGear();
+        return true;
+    }
+
+    public unsafe bool SaveCurrentEquipment(int gearsetId)
+    {
+        var module = RaptureGearsetModule.Instance();
+        return module != null && module->IsValidGearset(gearsetId)
+            && module->CurrentGearsetIndex == gearsetId && module->UpdateGearset(gearsetId) == 0;
+    }
+
     public unsafe IReadOnlyList<GearsetOption> GetIceGearsets()
     {
         var result = new List<GearsetOption>();
