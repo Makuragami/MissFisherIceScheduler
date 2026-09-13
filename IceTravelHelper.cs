@@ -44,6 +44,7 @@ internal sealed class IceTravelHelper
     {
         None,
         WaitingForTarget,
+        WaitingForMoveButton,
         ClickedMove,
     }
 
@@ -316,6 +317,11 @@ internal sealed class IceTravelHelper
             Status = "目的地界面当前不是奥克塞西亚，等待选择目标";
             return false;
         }
+        if (planetAction == PlanetSelectAction.WaitingForMoveButton)
+        {
+            Status = "已识别奥克塞西亚，正在定位“移动”按钮";
+            return false;
+        }
 
         var selectAction = TrySelectString(config.IceTerritoryId, out var selectedIndex, out var entryCount);
         if (selectAction == SelectStringAction.OpenedAreaMenu)
@@ -460,9 +466,45 @@ internal sealed class IceTravelHelper
 
         var texts = new List<string>();
         AtkComponentButton* moveButton = null;
-        for (var i = 0; i < addon->UldManager.NodeListCount; i++)
+        var visitedManagers = new HashSet<nint>();
+        ScanPlanetUi(&addon->UldManager, texts, ref moveButton, visitedManagers);
+
+        if (!planetUiLogged)
         {
-            var node = addon->UldManager.NodeList[i];
+            log.Information("Built-in ICE travel: WKSPlanetSelect visible, texts=[{Texts}], moveButtonFound={MoveFound}",
+                string.Join(" | ", texts.Distinct()), moveButton is not null);
+            planetUiLogged = true;
+        }
+
+        var targetVisible = targetTerritoryId == 1319
+            && texts.Any(x => x.Contains("奥克塞西亚", StringComparison.OrdinalIgnoreCase)
+                || x.Contains("Auxesia", StringComparison.OrdinalIgnoreCase));
+        if (!targetVisible)
+            return PlanetSelectAction.WaitingForTarget;
+        if (moveButton is null)
+            return PlanetSelectAction.WaitingForMoveButton;
+
+        var ownerNode = moveButton->AtkComponentBase.OwnerNode;
+        var clickEvent = ownerNode is null ? null : ownerNode->AtkResNode.AtkEventManager.Event;
+        if (clickEvent is null)
+        {
+            log.Warning("Built-in ICE travel: WKSPlanetSelect Move button has no click event");
+            return PlanetSelectAction.WaitingForTarget;
+        }
+
+        addon->ReceiveEvent(clickEvent->State.EventType, (int)clickEvent->Param, clickEvent, null);
+        return PlanetSelectAction.ClickedMove;
+    }
+
+    private unsafe void ScanPlanetUi(AtkUldManager* manager, List<string> texts,
+        ref AtkComponentButton* moveButton, HashSet<nint> visitedManagers)
+    {
+        if (manager is null || manager->NodeList is null || !visitedManagers.Add((nint)manager))
+            return;
+
+        for (var i = 0; i < manager->NodeListCount; i++)
+        {
+            var node = manager->NodeList[i];
             if (node is null || !node->IsVisible())
                 continue;
 
@@ -477,42 +519,24 @@ internal sealed class IceTravelHelper
             if (node->Type != NodeType.Component)
                 continue;
             var component = ((AtkComponentNode*)node)->Component;
-            if (component is null || component->GetComponentType() != ComponentType.Button)
+            if (component is null)
                 continue;
-            var button = (AtkComponentButton*)component;
-            var buttonText = button->ButtonTextNode is null
-                ? string.Empty
-                : button->ButtonTextNode->NodeText.ToString().Trim();
-            if (!string.IsNullOrEmpty(buttonText))
-                texts.Add(buttonText);
-            if (buttonText.Contains("移动", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(buttonText, "Move", StringComparison.OrdinalIgnoreCase))
-                moveButton = button;
+
+            if (component->GetComponentType() == ComponentType.Button)
+            {
+                var button = (AtkComponentButton*)component;
+                var buttonText = button->ButtonTextNode is null
+                    ? string.Empty
+                    : button->ButtonTextNode->NodeText.ToString().Trim();
+                if (!string.IsNullOrEmpty(buttonText))
+                    texts.Add(buttonText);
+                if (buttonText.Contains("移动", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(buttonText, "Move", StringComparison.OrdinalIgnoreCase))
+                    moveButton = button;
+            }
+
+            ScanPlanetUi(&component->UldManager, texts, ref moveButton, visitedManagers);
         }
-
-        if (!planetUiLogged)
-        {
-            log.Information("Built-in ICE travel: WKSPlanetSelect visible, texts=[{Texts}], moveButtonFound={MoveFound}",
-                string.Join(" | ", texts.Distinct()), moveButton is not null);
-            planetUiLogged = true;
-        }
-
-        var targetVisible = targetTerritoryId == 1319
-            && texts.Any(x => x.Contains("奥克塞西亚", StringComparison.OrdinalIgnoreCase)
-                || x.Contains("Auxesia", StringComparison.OrdinalIgnoreCase));
-        if (!targetVisible || moveButton is null)
-            return PlanetSelectAction.WaitingForTarget;
-
-        var ownerNode = moveButton->AtkComponentBase.OwnerNode;
-        var clickEvent = ownerNode is null ? null : ownerNode->AtkResNode.AtkEventManager.Event;
-        if (clickEvent is null)
-        {
-            log.Warning("Built-in ICE travel: WKSPlanetSelect Move button has no click event");
-            return PlanetSelectAction.WaitingForTarget;
-        }
-
-        addon->ReceiveEvent(clickEvent->State.EventType, (int)clickEvent->Param, clickEvent, null);
-        return PlanetSelectAction.ClickedMove;
     }
 
     private void TryStopPath()
