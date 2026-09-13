@@ -22,6 +22,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly PluginIpc ipc;
     private readonly GearsetHelper gearsets;
     private readonly MissFisherTargetReader targetReader = new();
+    private readonly IceTravelHelper iceTravel;
     private Configuration config;
     private SchedulerState state = SchedulerState.Idle;
     private DateTime stateSinceUtc = DateTime.UtcNow;
@@ -43,7 +44,8 @@ public sealed class Plugin : IDalamudPlugin
     private bool windowOpen;
 
     public Plugin(IDalamudPluginInterface pluginInterface, ICommandManager commands, IFramework framework,
-        ICondition condition, IClientState clientState, IPlayerState playerState, IPluginLog log)
+        ICondition condition, IClientState clientState, IPlayerState playerState, IDataManager dataManager,
+        IGameGui gameGui, IObjectTable objects, IPluginLog log)
     {
         this.pluginInterface = pluginInterface;
         this.commands = commands;
@@ -55,6 +57,7 @@ public sealed class Plugin : IDalamudPlugin
         config = pluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         config.Checkpoint ??= new CycleCheckpoint();
         ipc = new PluginIpc(pluginInterface, log);
+        iceTravel = new IceTravelHelper(pluginInterface, clientState, condition, dataManager, gameGui, objects, log);
         gearsets = new GearsetHelper(playerState);
         commands.AddHandler(Command, new CommandInfo(OnCommand) { HelpMessage = "/mfice - 打开配置；enable | disable | abort | reset | status" });
         framework.Update += OnUpdate;
@@ -151,6 +154,28 @@ public sealed class Plugin : IDalamudPlugin
         if (clientState.TerritoryType == config.IceTerritoryId)
         {
             Transition(SchedulerState.EquippingIceJob, "已进入目标宇宙探索区域，准备切换 ICE 职业");
+            return;
+        }
+        if (config.UseBuiltInIceTravel)
+        {
+            if (!actionSent)
+            {
+                iceTravel.Reset();
+                actionSent = true;
+            }
+            if (iceTravel.Tick(now, config, out var error))
+            {
+                Transition(SchedulerState.EquippingIceJob, "已进入目标宇宙探索区域，准备切换 ICE 职业");
+                return;
+            }
+            status = iceTravel.Status;
+            if (!string.IsNullOrWhiteSpace(error))
+            {
+                Fail(error);
+                return;
+            }
+            if (Elapsed(now) > TimeSpan.FromSeconds(Math.Clamp(config.IceTravelTimeoutSeconds, 30, 600)))
+                Fail($"未能在限定时间内进入目标 ICE 区域 {config.IceTerritoryId}");
             return;
         }
         if (!actionSent)
@@ -454,8 +479,20 @@ public sealed class Plugin : IDalamudPlugin
             ImGui.EndCombo();
         }
         var travel = config.IceTravelCommand;
-        if (ImGui.InputText("跨区步骤命令（用 || 分隔）", ref travel, 2048)) { config.IceTravelCommand = travel; Save(); }
-        ImGui.TextWrapped("步骤示例：传送到入口 || 前往入口 || 与入口交互。命令由已安装的传送/任务插件执行；调度器会逐步发送并确认目标区域。");
+        var builtInTravel = config.UseBuiltInIceTravel;
+        if (ImGui.Checkbox("使用内置最佳兔威洞入口流程", ref builtInTravel)) { config.UseBuiltInIceTravel = builtInTravel; Save(); }
+        if (builtInTravel)
+        {
+            ImGui.TextWrapped("自动传送到最佳兔威洞，前往 (21.9, 13.2, -1.4)，与架行威交互并确认进入。无需快捷传送面板。");
+            var optionIndex = config.IceEntranceOptionIndex;
+            if (ImGui.InputInt("入口对话选项序号（从 0 开始）", ref optionIndex))
+            { config.IceEntranceOptionIndex = Math.Clamp(optionIndex, 0, 10); Save(); }
+        }
+        else
+        {
+            if (ImGui.InputText("跨区步骤命令（用 || 分隔）", ref travel, 2048)) { config.IceTravelCommand = travel; Save(); }
+            ImGui.TextWrapped("备用外部命令模式：按顺序填写传送、寻路和入口交互命令，调度器会逐步发送并确认目标区域。");
+        }
 
         if (targetReader.TryGetResumeOptions(out var options))
         {

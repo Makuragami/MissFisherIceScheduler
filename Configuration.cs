@@ -1,4 +1,5 @@
 using Dalamud.Configuration;
+using System.Numerics;
 
 namespace MissFisherIceScheduler;
 
@@ -13,6 +14,11 @@ public sealed class Configuration : IPluginConfiguration
     public int IceStopTimeoutSeconds { get; set; } = 60;
     public uint IceTerritoryId { get; set; } = 1319;
     public int IceGearsetId { get; set; } = -1;
+    public bool UseBuiltInIceTravel { get; set; } = true;
+    public string IceEntranceAetheryteName { get; set; } = "最佳兔威洞";
+    public Vector3 IceEntrancePosition { get; set; } = new(21.9f, 13.2f, -1.4f);
+    public string IceEntranceNpcName { get; set; } = "架行威";
+    public int IceEntranceOptionIndex { get; set; }
     // Multiple external travel/interaction commands can be chained with "||".
     public string IceTravelCommand { get; set; } = string.Empty;
     public int IceTravelStepDelaySeconds { get; set; } = 4;
