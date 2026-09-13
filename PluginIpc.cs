@@ -16,8 +16,10 @@ internal sealed class PluginIpc
     private readonly ICallGateSubscriber<double> fisherNextWindow;
     private readonly ICallGateSubscriber<bool> iceRunning;
     private readonly ICallGateSubscriber<string> iceState;
+    private readonly ICallGateSubscriber<uint> iceCurrentMission;
     private readonly ICallGateSubscriber<object> iceEnable;
     private readonly ICallGateSubscriber<object> iceDisable;
+    private readonly ICallGateSubscriber<string, bool, object> iceChangeSetting;
     private DateTime nextWarningUtc;
 
     public PluginIpc(IDalamudPluginInterface pi, IPluginLog log)
@@ -32,8 +34,10 @@ internal sealed class PluginIpc
         fisherNextWindow = pi.GetIpcSubscriber<double>("MissFisher.Manager.SecondsUntilNextWindow");
         iceRunning = pi.GetIpcSubscriber<bool>("ICE.IsRunning");
         iceState = pi.GetIpcSubscriber<string>("ICE.CurrentState");
+        iceCurrentMission = pi.GetIpcSubscriber<uint>("ICE.CurrentMission");
         iceEnable = pi.GetIpcSubscriber<object>("ICE.Enable");
         iceDisable = pi.GetIpcSubscriber<object>("ICE.Disable");
+        iceChangeSetting = pi.GetIpcSubscriber<string, bool, object>("ICE.ChangeSetting");
     }
 
     public bool TryGetFisher(out MissFisherSnapshot value)
@@ -49,7 +53,7 @@ internal sealed class PluginIpc
 
     public bool TryGetIce(out IceSnapshot value)
     {
-        try { value = new(iceRunning.InvokeFunc(), iceState.InvokeFunc()); return true; }
+        try { value = new(iceRunning.InvokeFunc(), iceState.InvokeFunc(), iceCurrentMission.InvokeFunc()); return true; }
         catch (Exception ex) { Warn(ex, "ICE IPC unavailable"); value = default; return false; }
     }
 
@@ -65,6 +69,12 @@ internal sealed class PluginIpc
         catch (Exception ex) { log.Error(ex, "ICE Disable IPC failed"); return false; }
     }
 
+    public bool TrySetIceStopAfterCurrent(bool enabled)
+    {
+        try { iceChangeSetting.InvokeAction("StopAfterCurrent", enabled); return true; }
+        catch (Exception ex) { log.Error(ex, "ICE ChangeSetting IPC failed"); return false; }
+    }
+
     private void Warn(Exception ex, string message)
     {
         if (DateTime.UtcNow < nextWarningUtc) return;
@@ -75,4 +85,4 @@ internal sealed class PluginIpc
 
 internal readonly record struct MissFisherSnapshot(bool IsRunning, bool IsWindowActive, bool IsPaused,
     bool IsWaiting, bool IsAutoPreparing, bool IsInWindow, double SecondsUntilNextWindow);
-internal readonly record struct IceSnapshot(bool IsRunning, string State);
+internal readonly record struct IceSnapshot(bool IsRunning, string State, uint CurrentMission);

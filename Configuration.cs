@@ -12,6 +12,7 @@ public sealed class Configuration : IPluginConfiguration
     public int MinimumIceMinutes { get; set; } = 20;
     public int RecoveryReserveMinutes { get; set; } = 10;
     public int IceStopTimeoutSeconds { get; set; } = 60;
+    public int TestMissionStartTimeoutSeconds { get; set; } = 60;
     public uint IceTerritoryId { get; set; } = 1319;
     public int IceGearsetId { get; set; } = -1;
     public bool UseBuiltInIceTravel { get; set; } = true;
@@ -40,6 +41,7 @@ public sealed class CycleCheckpoint
     public DateTime? WindowStartUtc { get; set; }
     public int? FisherGearsetId { get; set; }
     public bool IceOwned { get; set; }
+    public bool TestMode { get; set; }
     public string ChecklistId { get; set; } = string.Empty;
     public string ChecklistName { get; set; } = string.Empty;
     public MissFisherResumeKind ResumeKind { get; set; } = MissFisherResumeKind.Collection;
