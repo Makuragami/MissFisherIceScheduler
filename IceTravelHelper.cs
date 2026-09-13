@@ -183,7 +183,7 @@ internal sealed class IceTravelHelper
             {
                 var nearby = objects
                     .Where(x => Vector3.DistanceSquared(x.Position, player.Position) <= 10000f)
-                    .Where(x => x.ObjectKind is DalamudObjectKind.EventNpc or DalamudObjectKind.BattleNpc or DalamudObjectKind.EventObject)
+                    .Where(x => x.ObjectKind is DalamudObjectKind.EventNpc or DalamudObjectKind.BattleNpc)
                     .Take(30)
                     .Select(x => $"{x.Name} kind={x.ObjectKind} baseId={x.BaseId} targetable={x.IsTargetable} pos={x.Position}")
                     .ToArray();
