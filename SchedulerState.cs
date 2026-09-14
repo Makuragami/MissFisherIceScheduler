@@ -8,6 +8,7 @@ internal enum SchedulerState
     TravellingToIce,
     EquippingIceJob,
     OptimizingIceGear,
+    RepairingIceGear,
     StartingIce,
     RunningIce,
     StoppingIce,

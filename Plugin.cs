@@ -23,6 +23,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly IAddonLifecycle addonLifecycle;
     private readonly PluginIpc ipc;
     private readonly GearsetHelper gearsets;
+    private readonly EquipmentRepairHelper equipmentRepair;
     private readonly MissFisherTargetReader targetReader = new();
     private readonly IceTravelHelper iceTravel;
     private Configuration config;
@@ -66,6 +67,7 @@ public sealed class Plugin : IDalamudPlugin
     private bool stopTimeoutLogged;
     private int iceGearOptimizationStep;
     private DateTime nextIceGearActionUtc;
+    private bool repairIceGearAfterStop;
 
     public Plugin(IDalamudPluginInterface pluginInterface, ICommandManager commands, IFramework framework,
         ICondition condition, IClientState clientState, IPlayerState playerState, IDataManager dataManager,
@@ -88,6 +90,7 @@ public sealed class Plugin : IDalamudPlugin
         iceTravel = new IceTravelHelper(pluginInterface, clientState, condition, dataManager, gameGui, objects, log,
             message => AddUiLog("旅行", message));
         gearsets = new GearsetHelper(playerState, dataManager);
+        equipmentRepair = new EquipmentRepairHelper(gameGui, condition);
         commands.AddHandler(Command, new CommandInfo(OnCommand) { HelpMessage = "/mfice - 打开配置；enable | disable | abort | reset | status" });
         framework.Update += OnUpdate;
         pluginInterface.UiBuilder.Draw += Draw;
@@ -132,6 +135,7 @@ public sealed class Plugin : IDalamudPlugin
             case SchedulerState.TravellingToIce: TickTravelling(now); break;
             case SchedulerState.EquippingIceJob: TickEquippingIce(now); break;
             case SchedulerState.OptimizingIceGear: TickOptimizingIceGear(now); break;
+            case SchedulerState.RepairingIceGear: TickRepairingIceGear(now); break;
             case SchedulerState.StartingIce: TickStartingIce(now); break;
             case SchedulerState.RunningIce: TickRunningIce(now); break;
             case SchedulerState.StoppingIce: TickStoppingIce(now); break;
@@ -206,6 +210,7 @@ public sealed class Plugin : IDalamudPlugin
         failedIceJobsThisCycle.Clear();
         rotatingIceJob = false;
         iceStopAfterCurrentOwned = false;
+        repairIceGearAfterStop = false;
         if (!TrySelectNextIceJob(out var selectionError))
         {
             lastError = selectionError;
@@ -400,7 +405,8 @@ public sealed class Plugin : IDalamudPlugin
     {
         if (activeIceGearsetId < 0)
         {
-            Transition(SchedulerState.StartingIce, "保持当前职业，准备启动 ICE");
+            Transition(config.RepairIceGearBeforeStart ? SchedulerState.RepairingIceGear : SchedulerState.StartingIce,
+                config.RepairIceGearBeforeStart ? "保持当前职业，准备检查装备耐久" : "保持当前职业，准备启动 ICE");
             return;
         }
         var selected = gearsets.GetIceGearsets().FirstOrDefault(x => x.GearsetId == activeIceGearsetId);
@@ -411,7 +417,10 @@ public sealed class Plugin : IDalamudPlugin
                 Transition(SchedulerState.OptimizingIceGear, $"已切换至 {activeIceJobName}，准备选择最强装备");
                 return;
             }
-            Transition(SchedulerState.StartingIce, $"已切换至 {activeIceJobName}，准备启动 ICE");
+            Transition(config.RepairIceGearBeforeStart ? SchedulerState.RepairingIceGear : SchedulerState.StartingIce,
+                config.RepairIceGearBeforeStart
+                    ? $"已切换至 {activeIceJobName}，准备检查装备耐久"
+                    : $"已切换至 {activeIceJobName}，准备启动 ICE");
             return;
         }
         if (IsSafe() && gearsets.Equip(activeIceGearsetId))
@@ -456,9 +465,41 @@ public sealed class Plugin : IDalamudPlugin
                 break;
             default:
                 AddUiLog("装备", $"{activeIceJobName} 已穿上最强装备；未保存或覆盖套装 {activeIceGearsetId}");
-                Transition(SchedulerState.StartingIce, $"{activeIceJobName} 已穿上最强装备，准备启动 ICE");
+                Transition(config.RepairIceGearBeforeStart ? SchedulerState.RepairingIceGear : SchedulerState.StartingIce,
+                    config.RepairIceGearBeforeStart
+                        ? $"{activeIceJobName} 已穿上最强装备，准备检查装备耐久"
+                        : $"{activeIceJobName} 已穿上最强装备，准备启动 ICE");
                 break;
         }
+    }
+
+    private void TickRepairingIceGear(DateTime now)
+    {
+        // The repair window itself sets Occupied, so this phase must not use
+        // IsSafe(), which would deadlock immediately after opening the window.
+        if (!playerState.IsLoaded || condition[ConditionFlag.InCombat]
+            || condition[ConditionFlag.BetweenAreas] || condition[ConditionFlag.BetweenAreas51]
+            || condition[ConditionFlag.Casting])
+        {
+            status = "等待角色可操作后修理装备";
+            return;
+        }
+        if (equipmentRepair.Tick(now, config.IceGearRepairThresholdPercent,
+                config.IceGearRepairTimeoutSeconds, out var repairStatus, out var error))
+        {
+            AddUiLog("修理", repairStatus);
+            repairIceGearAfterStop = false;
+            if (!testMode && windowStartUtc is not null
+                && Remaining(now) <= config.RecoveryReserveMinutes * 60d + 60)
+            {
+                BeginRestore($"{repairStatus}；钓鱼窗口临近，正在恢复 MissFisher");
+                return;
+            }
+            Transition(SchedulerState.StartingIce, $"{repairStatus}，准备启动 ICE");
+            return;
+        }
+        status = repairStatus;
+        if (!string.IsNullOrWhiteSpace(error)) Fail(error);
     }
 
     private void TickStartingIce(DateTime now)
@@ -502,6 +543,7 @@ public sealed class Plugin : IDalamudPlugin
             if (!config.Enabled || remaining <= config.RecoveryReserveMinutes * 60d)
             {
                 rotatingIceJob = false;
+                repairIceGearAfterStop = false;
                 ClearOwnedIceStopAfterCurrent();
                 Transition(SchedulerState.StoppingIce, "接近钓鱼窗口，正在停止 ICE");
                 return;
@@ -535,6 +577,13 @@ public sealed class Plugin : IDalamudPlugin
             if (!testMode && (rotatingIceJob || (config.AutoSelectIceJob && currentLevel >= config.IceJobLevelCap)))
             {
                 RotateIceJobOrRestore(now, $"{activeIceJobName} 已达到 Lv.{currentLevel}");
+                return;
+            }
+            if (!testMode && repairIceGearAfterStop)
+            {
+                iceOwned = false;
+                ClearOwnedIceStopAfterCurrent();
+                Transition(SchedulerState.RepairingIceGear, "ICE 已停止，正在修理当前装备");
                 return;
             }
             if (testMode && testMissionObserved)
@@ -594,6 +643,33 @@ public sealed class Plugin : IDalamudPlugin
                 return;
             }
         }
+        if (!testMode && config.RepairIceGearBeforeStart
+            && EquipmentRepairHelper.TryGetLowestEquippedPercent(out var lowestDurability)
+            && lowestDurability <= config.IceGearRepairThresholdPercent)
+        {
+            repairIceGearAfterStop = true;
+            // A damaged-but-usable set can finish the current mission safely.
+            // At 0% Artisan cannot progress, so waiting for mission completion
+            // would deadlock; stop ICE immediately and repair first.
+            if (ice.CurrentMission != 0 && lowestDurability > 0.01f)
+            {
+                if (!iceStopAfterCurrentOwned)
+                {
+                    if (!ipc.TrySetIceStopAfterCurrent(true))
+                    {
+                        Transition(SchedulerState.StoppingIce,
+                            $"装备最低耐久 {lowestDurability:F0}%，无法等待任务结束，正在停止 ICE 修理");
+                        return;
+                    }
+                    iceStopAfterCurrentOwned = true;
+                    AddUiLog("修理", $"装备最低耐久 {lowestDurability:F0}%，等待任务 {ice.CurrentMission} 完成后修理");
+                }
+                status = $"装备最低耐久 {lowestDurability:F0}%；等待当前 ICE 任务 {ice.CurrentMission} 完成后修理";
+                return;
+            }
+            Transition(SchedulerState.StoppingIce, $"装备最低耐久 {lowestDurability:F0}%，正在停止 ICE 修理");
+            return;
+        }
         if (testMode && !testMissionObserved && now - iceRunStartedUtc > TimeSpan.FromSeconds(Math.Clamp(config.TestMissionStartTimeoutSeconds, 15, 300)))
         {
             cycleOutcomeMessage = $"完整测试失败：ICE 已启动，但一直没有领取任务。请检查 ICE 的 Agenda、{GetRegionLabel(config.IceTerritoryId)} 区域和当前职业任务配置。";
@@ -634,9 +710,16 @@ public sealed class Plugin : IDalamudPlugin
         var iceKnown = ipc.TryGetIce(out var ice);
         var artisanKnown = ipc.TryGetArtisan(out var artisan);
         var iceStopped = iceKnown && !ice.IsRunning;
-        var artisanStopped = artisanKnown && !artisan.IsBusy;
+        var activelyCrafting = condition[ConditionFlag.Crafting]
+            || condition[ConditionFlag.ExecutingCraftingAction]
+            || condition[ConditionFlag.PreparingToCraft];
+        var staleArtisanBusy = artisanKnown && artisan.IsBusy && artisan.StopRequested
+            && !activelyCrafting && Elapsed(now) >= TimeSpan.FromSeconds(3);
+        var artisanStopped = artisanKnown && (!artisan.IsBusy || staleArtisanBusy);
         if (iceStopped && artisanStopped)
         {
+            if (staleArtisanBusy && stopConfirmedSinceUtc is null)
+                AddUiLog("停止", "Artisan 返回忙碌，但停止请求已生效且角色不在制作；按残留假忙处理");
             stopConfirmedSinceUtc ??= now;
             if (now - stopConfirmedSinceUtc < TimeSpan.FromSeconds(1.5))
             {
@@ -660,6 +743,13 @@ public sealed class Plugin : IDalamudPlugin
                 RotateIceJobOrRestore(now, $"{activeIceJobName} 已达到等级上限");
                 return;
             }
+            if (repairIceGearAfterStop)
+            {
+                iceOwned = false;
+                ClearOwnedIceStopAfterCurrent();
+                Transition(SchedulerState.RepairingIceGear, "ICE 与 Artisan 已停止，正在修理当前装备");
+                return;
+            }
             if (testMode) ipc.TrySetIceStopAfterCurrent(false);
             BeginRestore("ICE 与 Artisan 已完全停止，正在恢复捕鱼职业");
             return;
@@ -679,6 +769,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         iceOwned = false;
         rotatingIceJob = false;
+        repairIceGearAfterStop = false;
         ClearOwnedIceStopAfterCurrent();
         if (Remaining(now) <= config.RecoveryReserveMinutes * 60d + 60)
         {
@@ -819,6 +910,8 @@ public sealed class Plugin : IDalamudPlugin
             iceGearOptimizationStep = 0;
             nextIceGearActionUtc = DateTime.MinValue;
         }
+        if (next == SchedulerState.RepairingIceGear)
+            equipmentRepair.Reset();
         status = message;
         SaveCheckpoint();
         log.Information("State -> {State}: {Message}", next, message);
@@ -842,6 +935,7 @@ public sealed class Plugin : IDalamudPlugin
         activeIceJobName = string.Empty;
         failedIceJobsThisCycle.Clear();
         rotatingIceJob = false;
+        repairIceGearAfterStop = false;
         ClearOwnedIceStopAfterCurrent();
         cycleOutcomeMessage = string.Empty;
         config.Checkpoint = new CycleCheckpoint();
@@ -987,6 +1081,7 @@ public sealed class Plugin : IDalamudPlugin
         }
         cycleOutcomeMessage = emergency ? "调度已由用户停止" : cycleOutcomeMessage;
         rotatingIceJob = false;
+        repairIceGearAfterStop = false;
         ClearOwnedIceStopAfterCurrent();
         if (state is SchedulerState.RunningIce or SchedulerState.StartingIce or SchedulerState.StoppingIce)
         {
@@ -1104,6 +1199,16 @@ public sealed class Plugin : IDalamudPlugin
         var optimizeGear = config.EquipRecommendedGearOnSwitch;
         if (ImGui.Checkbox("切换职业后穿上最强装备（不保存套装）", ref optimizeGear))
         { config.EquipRecommendedGearOnSwitch = optimizeGear; Save(); }
+        var repairGear = config.RepairIceGearBeforeStart;
+        if (ImGui.Checkbox("启动 ICE 前修理当前装备", ref repairGear))
+        { config.RepairIceGearBeforeStart = repairGear; Save(); }
+        if (repairGear)
+        {
+            var repairThreshold = config.IceGearRepairThresholdPercent;
+            if (ImGui.SliderInt("装备修理阈值", ref repairThreshold, 1, 99, "%d%%"))
+            { config.IceGearRepairThresholdPercent = repairThreshold; Save(); }
+            ImGui.TextWrapped("只修理当前已装备物品，需要足够的暗物质及对应生产职业修理等级。启动前会检查；ICE 长时间运行中达到阈值时，会完成当前任务后停止、修理并重启 ICE。");
+        }
         if (autoJob)
         {
             var levelCap = config.IceJobLevelCap;

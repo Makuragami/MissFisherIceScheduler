@@ -17,6 +17,9 @@ public sealed class Configuration : IPluginConfiguration
     public int IceGearsetId { get; set; } = -1;
     public bool AutoSelectIceJob { get; set; } = true;
     public bool EquipRecommendedGearOnSwitch { get; set; } = true;
+    public bool RepairIceGearBeforeStart { get; set; } = true;
+    public int IceGearRepairThresholdPercent { get; set; } = 30;
+    public int IceGearRepairTimeoutSeconds { get; set; } = 60;
     public int IceJobLevelCap { get; set; } = 100;
     public bool IncludeFisherInIceRotation { get; set; } = true;
     public IceJobSelectionStrategy IceJobSelectionStrategy { get; set; } = IceJobSelectionStrategy.LowestLevel;
