@@ -628,25 +628,10 @@ public sealed class Plugin : IDalamudPlugin
             if (level >= config.IceJobLevelCap)
             {
                 rotatingIceJob = true;
-                if (ice.CurrentMission != 0)
-                {
-                    if (!iceStopAfterCurrentOwned)
-                    {
-                        if (ipc.TrySetIceStopAfterCurrent(true))
-                        {
-                            iceStopAfterCurrentOwned = true;
-                            AddUiLog("职业", $"{activeIceJobName} 已达到 Lv.{level}，等待任务 {ice.CurrentMission} 完成后换职业");
-                        }
-                        else
-                        {
-                            Transition(SchedulerState.StoppingIce, $"{activeIceJobName} 已满级，无法设置任务后停止，正在直接停止 ICE");
-                            return;
-                        }
-                    }
-                    status = $"{activeIceJobName} 已达到 Lv.{level}；等待当前 ICE 任务 {ice.CurrentMission} 完成后切换职业";
-                    return;
-                }
-                Transition(SchedulerState.StoppingIce, $"{activeIceJobName} 已达到 Lv.{level}，正在切换下一个职业");
+                ClearOwnedIceStopAfterCurrent();
+                AddUiLog("职业", $"{activeIceJobName} 已达到 Lv.{level}，立即停止 ICE 派发；当前单件制作完成后换职业");
+                Transition(SchedulerState.StoppingIce,
+                    $"{activeIceJobName} 已达到 Lv.{level}，正在完成当前单件制作并切换职业");
                 return;
             }
         }
