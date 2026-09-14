@@ -129,7 +129,9 @@ public sealed class Plugin : IDalamudPlugin
     {
         var now = DateTime.UtcNow;
         if (now < nextTickUtc) return;
-        nextTickUtc = now.AddMilliseconds(500);
+        // Stopping Artisan safely depends on catching the short idle interval after
+        // the current synthesis closes and before Endurance can start another one.
+        nextTickUtc = now.AddMilliseconds(state == SchedulerState.StoppingIce ? 100 : 500);
 
         ipc.TryGetFisher(out var fisher);
         switch (state)
@@ -692,40 +694,74 @@ public sealed class Plugin : IDalamudPlugin
 
     private void TickStoppingIce(DateTime now)
     {
-        if (!actionSent || now >= nextIceStopRetryUtc)
-        {
-            var firstRequest = !actionSent;
-            var iceStopSent = ipc.TryDisableIce();
-            if (ipc.TryGetArtisan(out var artisanBeforeStop))
-            {
-                if (!artisanBeforeStop.StopRequested && ipc.TryStopArtisan())
-                    artisanStopRequestOwned = true;
-            }
-            else if (!artisanStopRequestOwned && ipc.TryStopArtisan())
-            {
-                artisanStopRequestOwned = true;
-            }
-            actionSent = true;
-            nextIceStopRetryUtc = now.AddSeconds(2);
-            status = "已请求 ICE 与 Artisan 停止，等待制作完全结束";
-            if (firstRequest)
-                AddUiLog("停止", $"已发送 ICE 停止={iceStopSent}、Artisan 停止={artisanStopRequestOwned}");
-        }
-
-        var iceKnown = ipc.TryGetIce(out var ice);
-        var artisanKnown = ipc.TryGetArtisan(out var artisan);
-        var iceStopped = iceKnown && !ice.IsRunning;
         var synthesisVisible = IsAddonVisible("Synthesis") || IsAddonVisible("SynthesisSimple");
         var craftingFlag = condition[ConditionFlag.Crafting];
         var executingCraftAction = condition[ConditionFlag.ExecutingCraftingAction];
         var preparingToCraft = condition[ConditionFlag.PreparingToCraft];
+        var activeSynthesis = synthesisVisible || executingCraftAction || preparingToCraft;
+
+        var iceKnown = ipc.TryGetIce(out var ice);
+        var artisanKnown = ipc.TryGetArtisan(out var artisan);
+        var artisanStopOpportunity = artisanKnown && !activeSynthesis && !artisan.StopRequested;
+        var frozenActiveSynthesis = artisanKnown && activeSynthesis && artisan.StopRequested;
+        if (!actionSent || now >= nextIceStopRetryUtc || artisanStopOpportunity || frozenActiveSynthesis)
+        {
+            var firstRequest = !actionSent;
+            var iceStopSent = ipc.TryDisableIce();
+            var artisanAction = "IPC 不可用";
+            if (artisanKnown)
+            {
+                if (activeSynthesis)
+                {
+                    // Artisan's stop request disables Endurance immediately. Sending it
+                    // during synthesis freezes the solver before the current item ends.
+                    // Clear such a request, let this one item finish, then stop Artisan
+                    // during the first game-visible idle interval.
+                    if (artisan.StopRequested)
+                    {
+                        if (ipc.TryResumeArtisanForDrain())
+                        {
+                            artisanStopRequestOwned = false;
+                            artisanAction = "临时继续当前合成";
+                            AddUiLog("停止", "停止请求冻结了当前合成；已让 Artisan 继续完成当前这一件");
+                        }
+                        else artisanAction = "解除当前合成暂停失败";
+                    }
+                    else artisanAction = "等待当前合成完成";
+                }
+                else if (!artisan.StopRequested && ipc.TryStopArtisan())
+                {
+                    artisanStopRequestOwned = true;
+                    artisanAction = "已发送停止";
+                }
+                else artisanAction = artisan.StopRequested ? "停止已生效" : "停止发送失败";
+            }
+            else if (!activeSynthesis && !artisanStopRequestOwned && ipc.TryStopArtisan())
+            {
+                artisanStopRequestOwned = true;
+                artisanAction = "已发送停止";
+            }
+            actionSent = true;
+            nextIceStopRetryUtc = now.AddSeconds(2);
+            status = activeSynthesis
+                ? "ICE 已停止，正在完成当前一次合成；完成后立即停止 Artisan"
+                : "已请求 ICE 与 Artisan 停止，等待制作完全结束";
+            if (firstRequest)
+                AddUiLog("停止", $"已发送 ICE 停止={iceStopSent}；Artisan={artisanAction}");
+
+            // Refresh values after changing the stop request so diagnostics describe
+            // the resulting state rather than the pre-action snapshot.
+            iceKnown = ipc.TryGetIce(out ice);
+            artisanKnown = ipc.TryGetArtisan(out artisan);
+        }
+
+        var iceStopped = iceKnown && !ice.IsRunning;
 
         // Artisan.IsBusy includes its internal Crafting.CurState. That state can remain
         // non-idle after ICE has aborted its task queue, even though the game is no
         // longer synthesizing. Only game-visible synthesis evidence is allowed to keep
         // the handoff blocked. Require five stable seconds without such evidence so a
         // normal gap between crafting actions cannot be mistaken for completion.
-        var activeSynthesis = synthesisVisible || executingCraftAction || preparingToCraft;
         if (activeSynthesis)
             noActiveSynthesisSinceUtc = null;
         else

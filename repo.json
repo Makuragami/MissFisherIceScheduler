@@ -3,7 +3,7 @@
     "Author": "makuragami",
     "Name": "MissFisher ICE Scheduler",
     "InternalName": "MissFisherIceScheduler",
-    "AssemblyVersion": "0.1.24.0",
+    "AssemblyVersion": "0.1.25.0",
     "Description": "在 MissFisher 钓鱼等待间隙运行 ICE，并在下一目标窗口前恢复捕鱼。",
     "ApplicableVersion": "any",
     "RepoUrl": "https://github.com/Makuragami/MissFisherIceScheduler",
@@ -14,7 +14,7 @@
     "CanUnloadAsync": false,
     "Punchline": "协调 MissFisher 钓鱼间隙与 ICE 宇宙探索任务。",
     "AcceptsFeedback": true,
-    "ChangeLog": "# v0.1.24\n- 停止时以游戏实际合成界面和制作动作为安全信号，不再被 Artisan 内部残留忙碌状态永久阻塞。\n- 每 10 秒将 ICE、Artisan 与游戏制作状态写入 Dalamud 日志。\n- 停止超时会记录具体阻塞信号；真实合成仍在进行时仍保持安全等待。\n\n# v0.1.23\n- 启动 ICE 前检查当前已装备物品的最低耐久。\n- 低于可配置阈值时自动调用游戏原生自修，仅修理当前装备。\n- 等待修理完成后才启动 ICE；缺少暗物质或修理等级不足时给出超时错误。\n\n# v0.1.22\n- 切换职业后自动穿上游戏推荐的最强装备，但不保存或覆盖原套装。\n\n# v0.1.21\n- 增加职业切换后的游戏原生推荐装备流程。\n\n# v0.1.20\n- 停止 ICE 时同步停止 Artisan，双方稳定空闲后才恢复 MissFisher。\n\n# v0.1.19\n- 增加生产/采集职业自动轮换、等级上限与职业排除配置。\n\n# v0.1.18\n- 支持选择四个宇宙探索区域并自动操作目的地界面。\n\n# v0.1.17\n- 主界面调整为状态、配置、日志三页并增加完整流程测试。\n\n# v0.1.4\n- 最佳兔威洞改用稳定的以太之光 ID 175。\n\n# v0.1.3\n- 内置最佳兔威洞月球入口流程。\n\n# v0.1.2\n- 增加跨区步骤命令链并严格确认目标区域。\n\n# v0.1.1\n- 适配 MissFisher 2.4.0.0。\n\n# v0.1.0\n- 在 MissFisher 等待窗口期间运行 ICE，并在窗口前恢复捕鱼。\n",
+    "ChangeLog": "# v0.1.25\n- 修复正在合成时停止调度，Artisan 停在合成界面却不再执行技能的死锁。\n- 改为先停 ICE，让 Artisan 完成当前一件，再在合成间隙停止 Artisan。\n- 停止阶段以 100 毫秒间隔检查合成状态，避免漏掉停止窗口。\n\n# v0.1.24\n- 使用游戏实际合成信号识别 Artisan 内部残留忙碌状态。\n- 增加停止阶段的定期诊断日志。\n\n# v0.1.23\n- 启动 ICE 前自动检查并修理当前装备。\n\n# v0.1.22\n- 切换职业后穿上游戏推荐的最强装备，不保存或覆盖原套装。\n\n# v0.1.20\n- 停止 ICE 时同步停止 Artisan，双方稳定空闲后恢复 MissFisher。\n\n# v0.1.19\n- 增加生产/采集职业自动轮换、等级上限与职业排除。\n\n# v0.1.18\n- 支持四个宇宙探索区域与目的地界面自动交互。",
     "DownloadLinkInstall": "https://raw.githubusercontent.com/Makuragami/MissFisherIceScheduler/refs/heads/main/latest.zip",
     "DownloadLinkUpdate": "https://raw.githubusercontent.com/Makuragami/MissFisherIceScheduler/refs/heads/main/latest.zip"
   }

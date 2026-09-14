@@ -99,6 +99,12 @@ internal sealed class PluginIpc
         catch (Exception ex) { log.Error(ex, "Artisan stop IPC failed"); return false; }
     }
 
+    public bool TryResumeArtisanForDrain()
+    {
+        try { artisanSetStopRequest.InvokeAction(false); return true; }
+        catch (Exception ex) { log.Error(ex, "Artisan drain-resume IPC failed"); return false; }
+    }
+
     public bool TryPrepareArtisanForIce()
     {
         try
