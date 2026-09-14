@@ -5,6 +5,7 @@ using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.Command;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
+using FFXIVClientStructs.FFXIV.Component.GUI;
 using System.Numerics;
 
 namespace MissFisherIceScheduler;
@@ -19,6 +20,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly ICondition condition;
     private readonly IClientState clientState;
     private readonly IPlayerState playerState;
+    private readonly IGameGui gameGui;
     private readonly IPluginLog log;
     private readonly IAddonLifecycle addonLifecycle;
     private readonly PluginIpc ipc;
@@ -64,6 +66,8 @@ public sealed class Plugin : IDalamudPlugin
     private bool artisanStopRequestOwned;
     private DateTime nextIceStopRetryUtc;
     private DateTime? stopConfirmedSinceUtc;
+    private DateTime? noActiveSynthesisSinceUtc;
+    private DateTime nextStopDiagnosticUtc;
     private bool stopTimeoutLogged;
     private int iceGearOptimizationStep;
     private DateTime nextIceGearActionUtc;
@@ -80,6 +84,7 @@ public sealed class Plugin : IDalamudPlugin
         this.condition = condition;
         this.clientState = clientState;
         this.playerState = playerState;
+        this.gameGui = gameGui;
         this.log = log;
         this.addonLifecycle = addonLifecycle;
         config = pluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
@@ -710,16 +715,46 @@ public sealed class Plugin : IDalamudPlugin
         var iceKnown = ipc.TryGetIce(out var ice);
         var artisanKnown = ipc.TryGetArtisan(out var artisan);
         var iceStopped = iceKnown && !ice.IsRunning;
-        var activelyCrafting = condition[ConditionFlag.Crafting]
-            || condition[ConditionFlag.ExecutingCraftingAction]
-            || condition[ConditionFlag.PreparingToCraft];
+        var synthesisVisible = IsAddonVisible("Synthesis") || IsAddonVisible("SynthesisSimple");
+        var craftingFlag = condition[ConditionFlag.Crafting];
+        var executingCraftAction = condition[ConditionFlag.ExecutingCraftingAction];
+        var preparingToCraft = condition[ConditionFlag.PreparingToCraft];
+
+        // Artisan.IsBusy includes its internal Crafting.CurState. That state can remain
+        // non-idle after ICE has aborted its task queue, even though the game is no
+        // longer synthesizing. Only game-visible synthesis evidence is allowed to keep
+        // the handoff blocked. Require five stable seconds without such evidence so a
+        // normal gap between crafting actions cannot be mistaken for completion.
+        var activeSynthesis = synthesisVisible || executingCraftAction || preparingToCraft;
+        if (activeSynthesis)
+            noActiveSynthesisSinceUtc = null;
+        else
+            noActiveSynthesisSinceUtc ??= now;
+        var noActiveSynthesisStable = noActiveSynthesisSinceUtc is not null
+            && now - noActiveSynthesisSinceUtc >= TimeSpan.FromSeconds(5);
         var staleArtisanBusy = artisanKnown && artisan.IsBusy && artisan.StopRequested
-            && !activelyCrafting && Elapsed(now) >= TimeSpan.FromSeconds(3);
+            && noActiveSynthesisStable && Elapsed(now) >= TimeSpan.FromSeconds(8);
         var artisanStopped = artisanKnown && (!artisan.IsBusy || staleArtisanBusy);
+
+        if (now >= nextStopDiagnosticUtc)
+        {
+            var inactiveSeconds = noActiveSynthesisSinceUtc is null
+                ? 0
+                : Math.Max(0, (now - noActiveSynthesisSinceUtc.Value).TotalSeconds);
+            log.Information(
+                "ICE stop check: elapsed={Elapsed:F1}s, iceKnown={IceKnown}, iceRunning={IceRunning}, iceState={IceState}, " +
+                "artisanKnown={ArtisanKnown}, artisanBusy={ArtisanBusy}, stopRequested={StopRequested}, " +
+                "synthesisVisible={SynthesisVisible}, craftingFlag={CraftingFlag}, executing={Executing}, " +
+                "preparing={Preparing}, noActiveSynthesis={Inactive:F1}s, staleBusy={StaleBusy}",
+                Elapsed(now).TotalSeconds, iceKnown, iceKnown && ice.IsRunning, iceKnown ? ice.State : "IPC unavailable",
+                artisanKnown, artisanKnown && artisan.IsBusy, artisanKnown && artisan.StopRequested,
+                synthesisVisible, craftingFlag, executingCraftAction, preparingToCraft, inactiveSeconds, staleArtisanBusy);
+            nextStopDiagnosticUtc = now.AddSeconds(10);
+        }
         if (iceStopped && artisanStopped)
         {
             if (staleArtisanBusy && stopConfirmedSinceUtc is null)
-                AddUiLog("停止", "Artisan 返回忙碌，但停止请求已生效且角色不在制作；按残留假忙处理");
+                AddUiLog("停止", "Artisan 返回忙碌，但连续 5 秒没有实际合成界面或制作动作；按内部状态残留处理");
             stopConfirmedSinceUtc ??= now;
             if (now - stopConfirmedSinceUtc < TimeSpan.FromSeconds(1.5))
             {
@@ -756,13 +791,27 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         stopConfirmedSinceUtc = null;
-        status = $"正在停止：ICE={(iceKnown ? ice.State : "IPC 不可用")}，Artisan={(artisanKnown ? artisan.IsBusy ? "仍在制作" : "已空闲" : "IPC 不可用")}";
+        var craftEvidence = synthesisVisible ? "合成界面可见"
+            : executingCraftAction ? "正在执行制作技能"
+            : preparingToCraft ? "正在准备制作"
+            : craftingFlag ? "仅游戏制作状态残留"
+            : "无实际制作信号";
+        status = $"正在停止：ICE={(iceKnown ? ice.State : "IPC 不可用")}，Artisan={(artisanKnown ? artisan.IsBusy ? "忙碌" : "已空闲" : "IPC 不可用")}；{craftEvidence}";
         if (!stopTimeoutLogged && Elapsed(now) > TimeSpan.FromSeconds(config.IceStopTimeoutSeconds))
         {
             stopTimeoutLogged = true;
-            lastError = "ICE/Artisan 停止等待超时；为避免与 MissFisher 冲突，将继续重试而不提前恢复捕鱼";
+            lastError = $"ICE/Artisan 停止等待超时：ICE={(iceKnown ? ice.State : "IPC 不可用")}，" +
+                $"Artisan={(artisanKnown ? artisan.IsBusy ? "忙碌" : "空闲" : "IPC 不可用")}，{craftEvidence}；" +
+                "仍检测到真实合成时会继续等待，只有残留状态不会再阻塞恢复捕鱼";
             AddUiLog("警告", lastError);
+            log.Warning("{Message}", lastError);
         }
+    }
+
+    private unsafe bool IsAddonVisible(string name)
+    {
+        var addon = (AtkUnitBase*)gameGui.GetAddonByName(name, 1).Address;
+        return addon is not null && addon->IsVisible;
     }
 
     private void RotateIceJobOrRestore(DateTime now, string reason, bool unavailableInRegion = false)
@@ -903,6 +952,8 @@ public sealed class Plugin : IDalamudPlugin
         {
             nextIceStopRetryUtc = DateTime.MinValue;
             stopConfirmedSinceUtc = null;
+            noActiveSynthesisSinceUtc = null;
+            nextStopDiagnosticUtc = DateTime.MinValue;
             stopTimeoutLogged = false;
         }
         if (next == SchedulerState.OptimizingIceGear)
