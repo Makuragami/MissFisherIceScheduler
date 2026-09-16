@@ -67,8 +67,11 @@ public sealed class Plugin : IDalamudPlugin
     private DateTime nextIceStopRetryUtc;
     private DateTime? stopConfirmedSinceUtc;
     private DateTime? noActiveSynthesisSinceUtc;
+    private DateTime lastCraftActivityUtc;
+    private DateTime nextStalledSynthesisCloseUtc;
     private DateTime nextStopDiagnosticUtc;
     private bool stopTimeoutLogged;
+    private bool brokenGearRecovery;
     private int iceGearOptimizationStep;
     private DateTime nextIceGearActionUtc;
     private bool repairIceGearAfterStop;
@@ -496,6 +499,7 @@ public sealed class Plugin : IDalamudPlugin
         {
             AddUiLog("修理", repairStatus);
             repairIceGearAfterStop = false;
+            brokenGearRecovery = false;
             if (!testMode && windowStartUtc is not null
                 && Remaining(now) <= config.RecoveryReserveMinutes * 60d + 60)
             {
@@ -511,6 +515,17 @@ public sealed class Plugin : IDalamudPlugin
 
     private void TickStartingIce(DateTime now)
     {
+        // Broken gear makes Artisan open a synthesis and then refuse to execute any
+        // action. This safety check is mandatory even when optional repair is off.
+        if (EquipmentRepairHelper.TryGetLowestEquippedPercent(out var startDurability)
+            && startDurability <= 0.01f)
+        {
+            brokenGearRecovery = true;
+            repairIceGearAfterStop = true;
+            AddUiLog("修理", "检测到已损坏装备；安全修理不受常规修理开关影响");
+            Transition(SchedulerState.RepairingIceGear, "装备耐久为 0%，必须先修理才能启动 ICE");
+            return;
+        }
         if (!actionSent)
         {
             if (!ipc.TryPrepareArtisanForIce())
@@ -635,11 +650,16 @@ public sealed class Plugin : IDalamudPlugin
                 return;
             }
         }
-        if (!testMode && config.RepairIceGearBeforeStart
+        if (!testMode
             && EquipmentRepairHelper.TryGetLowestEquippedPercent(out var lowestDurability)
-            && lowestDurability <= config.IceGearRepairThresholdPercent)
+            && ((config.RepairIceGearBeforeStart
+                    && lowestDurability <= config.IceGearRepairThresholdPercent)
+                || lowestDurability <= 0.01f))
         {
             repairIceGearAfterStop = true;
+            brokenGearRecovery = lowestDurability <= 0.01f;
+            if (brokenGearRecovery)
+                AddUiLog("修理", "检测到装备耐久为 0%；立即停止 ICE，并在退出失效合成后强制修理");
             // A damaged-but-usable set can finish the current mission safely.
             // At 0% Artisan cannot progress, so waiting for mission completion
             // would deadlock; stop ICE immediately and repair first.
@@ -683,7 +703,18 @@ public sealed class Plugin : IDalamudPlugin
         var craftingFlag = condition[ConditionFlag.Crafting];
         var executingCraftAction = condition[ConditionFlag.ExecutingCraftingAction];
         var preparingToCraft = condition[ConditionFlag.PreparingToCraft];
-        var activeSynthesis = synthesisVisible || executingCraftAction || preparingToCraft;
+        if (executingCraftAction || preparingToCraft)
+            lastCraftActivityUtc = now;
+        var stalledBrokenSynthesis = brokenGearRecovery && synthesisVisible && craftingFlag
+            && !executingCraftAction && !preparingToCraft
+            && now - lastCraftActivityUtc >= TimeSpan.FromSeconds(20);
+        if (stalledBrokenSynthesis && now >= nextStalledSynthesisCloseUtc)
+        {
+            TryCloseStalledSynthesis();
+            nextStalledSynthesisCloseUtc = now.AddSeconds(2);
+        }
+        var activeSynthesis = !stalledBrokenSynthesis
+            && (synthesisVisible || executingCraftAction || preparingToCraft);
 
         var iceKnown = ipc.TryGetIce(out var ice);
         var artisanKnown = ipc.TryGetArtisan(out var artisan);
@@ -728,7 +759,9 @@ public sealed class Plugin : IDalamudPlugin
             }
             actionSent = true;
             nextIceStopRetryUtc = now.AddSeconds(2);
-            status = activeSynthesis
+            status = stalledBrokenSynthesis
+                ? "检测到损坏装备导致的失效合成，正在强制退出并修理"
+                : activeSynthesis
                 ? "ICE 已停止，正在完成当前一次合成；完成后立即停止 Artisan"
                 : "已请求 ICE 与 Artisan 停止，等待制作完全结束";
             if (firstRequest)
@@ -812,7 +845,8 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         stopConfirmedSinceUtc = null;
-        var craftEvidence = synthesisVisible ? "合成界面可见"
+        var craftEvidence = stalledBrokenSynthesis ? "损坏装备导致的失效合成"
+            : synthesisVisible ? "合成界面可见"
             : executingCraftAction ? "正在执行制作技能"
             : preparingToCraft ? "正在准备制作"
             : craftingFlag ? "仅游戏制作状态残留"
@@ -833,6 +867,16 @@ public sealed class Plugin : IDalamudPlugin
     {
         var addon = (AtkUnitBase*)gameGui.GetAddonByName(name, 1).Address;
         return addon is not null && addon->IsVisible;
+    }
+
+    private unsafe void TryCloseStalledSynthesis()
+    {
+        foreach (var name in new[] { "Synthesis", "SynthesisSimple" })
+        {
+            var addon = (AtkUnitBase*)gameGui.GetAddonByName(name, 1).Address;
+            if (addon is null || !addon->IsVisible) continue;
+            addon->Close(true);
+        }
     }
 
     private void RotateIceJobOrRestore(DateTime now, string reason, bool unavailableInRegion = false)
@@ -974,6 +1018,8 @@ public sealed class Plugin : IDalamudPlugin
             nextIceStopRetryUtc = DateTime.MinValue;
             stopConfirmedSinceUtc = null;
             noActiveSynthesisSinceUtc = null;
+            lastCraftActivityUtc = DateTime.UtcNow;
+            nextStalledSynthesisCloseUtc = DateTime.MinValue;
             nextStopDiagnosticUtc = DateTime.MinValue;
             stopTimeoutLogged = false;
         }
@@ -1008,6 +1054,7 @@ public sealed class Plugin : IDalamudPlugin
         failedIceJobsThisCycle.Clear();
         rotatingIceJob = false;
         repairIceGearAfterStop = false;
+        brokenGearRecovery = false;
         ClearOwnedIceStopAfterCurrent();
         cycleOutcomeMessage = string.Empty;
         config.Checkpoint = new CycleCheckpoint();
