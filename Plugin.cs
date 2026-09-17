@@ -945,7 +945,7 @@ public sealed class Plugin : IDalamudPlugin
             if (Elapsed(now) < TimeSpan.FromSeconds(2)) return;
             if (!targetReader.TryStartResumeTarget(cycleResumeKind, cycleChecklistId, cycleChecklistName, out var error))
             {
-                Fail($"无法重新启动 MissFisher“{cycleChecklistName}”：{error}");
+                FailTerminal($"无法重新启动 MissFisher“{cycleChecklistName}”：{error}");
                 return;
             }
             Transition(SchedulerState.RestartingFisher, $"正在重新启动“{cycleChecklistName}”");
@@ -1078,6 +1078,22 @@ public sealed class Plugin : IDalamudPlugin
         }
         state = SchedulerState.Faulted;
         status = message;
+    }
+
+    private void FailTerminal(string message)
+    {
+        lastError = message;
+        log.Error("{Message}", message);
+        AddUiLog("错误", message);
+        iceOwned = false;
+        rotatingIceJob = false;
+        repairIceGearAfterStop = false;
+        ClearOwnedIceStopAfterCurrent();
+        config.Checkpoint = new CycleCheckpoint();
+        Save();
+        state = SchedulerState.Faulted;
+        stateSinceUtc = DateTime.UtcNow;
+        status = $"{message}；捕鱼职业已恢复，请检查 MissFisher 或重置调度器";
     }
 
     private void SaveCheckpoint()

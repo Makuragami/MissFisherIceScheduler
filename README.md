@@ -5,7 +5,7 @@
 ## 依赖
 
 - Dalamud API 15
-- MissFisher 2.3.1.x 或 2.4.0.0
+- MissFisher 2.3.1.x、2.4.0.0 或 2.4.2.1
 - ICE 1.0.0.2000
 - ICE 正常运行所需的 vnavmesh、Artisan、AutoHook 等插件
 

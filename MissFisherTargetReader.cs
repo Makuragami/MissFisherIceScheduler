@@ -18,6 +18,7 @@ internal sealed class MissFisherTargetReader
         Version2302,
         Version231,
         Version240,
+        Version2421,
     }
 
     public string Status { get; private set; } = "尚未探测";
@@ -205,6 +206,7 @@ internal sealed class MissFisherTargetReader
         var modern = schema != ReflectionSchema.Version224;
         var stateTypeName = schema switch
         {
+            ReflectionSchema.Version2421 => "g.gb",
             ReflectionSchema.Version240 => "g.gB",
             ReflectionSchema.Version231 => "G.GZ",
             _ when modern => "G.Gy",
@@ -212,15 +214,20 @@ internal sealed class MissFisherTargetReader
         };
         var stateProviderName = schema switch
         {
+            ReflectionSchema.Version2421 => "G.Gy",
             ReflectionSchema.Version240 => "G.GY",
             ReflectionSchema.Version231 => "G.GW",
             ReflectionSchema.Version2302 => "G.Gv",
             ReflectionSchema.Version2301 => "G.GV",
             _ => "G.GN",
         };
-        var catalogProviderName = schema == ReflectionSchema.Version240
-            ? "G.Go"
-            : modern ? "G.GM" : "G.GE";
+        var catalogProviderName = schema switch
+        {
+            ReflectionSchema.Version2421 => "G.GP",
+            ReflectionSchema.Version240 => "G.Go",
+            _ when modern => "G.GM",
+            _ => "G.GE",
+        };
         var stateType = assembly.GetType(stateTypeName) ?? throw new MissingMemberException(stateTypeName);
         var state = GetParameterlessMethod(
                 assembly.GetType(stateProviderName),
@@ -267,6 +274,7 @@ internal sealed class MissFisherTargetReader
         var managerMethodName = schema == ReflectionSchema.Version224 ? "n" : "O";
         var idPropertyName = schema switch
         {
+            ReflectionSchema.Version2421 => "bEc",
             ReflectionSchema.Version240 => "bEa",
             ReflectionSchema.Version231 => "bDy",
             ReflectionSchema.Version2302 => "bDT",
@@ -275,6 +283,7 @@ internal sealed class MissFisherTargetReader
         };
         var namePropertyName = schema switch
         {
+            ReflectionSchema.Version2421 => "bED",
             ReflectionSchema.Version240 => "bEB",
             ReflectionSchema.Version231 => "bDZ",
             ReflectionSchema.Version2302 => "bDt",
@@ -318,14 +327,18 @@ internal sealed class MissFisherTargetReader
         ClearMembers();
 
         var bridge240Type = assembly.GetType("E.EQ");
+        var runner2421Field = bridge240Type?.GetField("yI", BindingFlags.Static | BindingFlags.NonPublic);
+        var modern2421 = runner2421Field?.FieldType.FullName == "i.is";
         var runner240Field = bridge240Type?.GetField("yi", BindingFlags.Static | BindingFlags.NonPublic);
-        var modern240 = runner240Field?.FieldType.FullName == "i.iS";
+        var modern240 = !modern2421 && runner240Field?.FieldType.FullName == "i.iS";
         var modernBridgeType = assembly.GetType("E.EP");
         var runnerField = modernBridgeType?.GetField("yf", BindingFlags.Static | BindingFlags.NonPublic);
         var modern231 = runnerField?.FieldType.Name == "iQ";
         var modern2302 = runnerField is not null && !modern231;
         var modern2301 = modernBridgeType?.GetField("yF", BindingFlags.Static | BindingFlags.NonPublic) is not null;
-        reflectionSchema = modern240
+        reflectionSchema = modern2421
+            ? ReflectionSchema.Version2421
+            : modern240
             ? ReflectionSchema.Version240
             : modern231
             ? ReflectionSchema.Version231
@@ -334,16 +347,18 @@ internal sealed class MissFisherTargetReader
             : modern2301
                 ? ReflectionSchema.Version2301
                 : ReflectionSchema.Version224;
-        var modern = modern240 || modern231 || modern2302 || modern2301;
-        var bridgeType = modern240 ? bridge240Type : modern ? modernBridgeType : assembly.GetType("E.EL");
-        checklistRunnerField = modern240
+        var modern = modern2421 || modern240 || modern231 || modern2302 || modern2301;
+        var bridgeType = modern2421 || modern240 ? bridge240Type : modern ? modernBridgeType : assembly.GetType("E.EL");
+        checklistRunnerField = modern2421
+            ? runner2421Field
+            : modern240
             ? runner240Field
             : bridgeType?.GetField(
                 modern231 || modern2302 ? "yf" : modern2301 ? "yF" : "YI",
                 BindingFlags.Static | BindingFlags.NonPublic);
         var runnerType = checklistRunnerField?.FieldType;
         currentTargetProperty = runnerType?.GetProperty(
-            modern240 ? "bfB" : modern231 ? "beZ" : modern2302 ? "bet" : modern2301 ? "beM" : "bCp",
+            modern2421 ? "bfD" : modern240 ? "bfB" : modern231 ? "beZ" : modern2302 ? "bet" : modern2301 ? "beM" : "bCp",
             BindingFlags.Instance | BindingFlags.NonPublic);
         var targetType = currentTargetProperty?.PropertyType;
         timingMethod = targetType?.GetMethod(

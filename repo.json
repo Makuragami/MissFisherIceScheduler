@@ -3,7 +3,7 @@
     "Author": "makuragami",
     "Name": "MissFisher ICE Scheduler",
     "InternalName": "MissFisherIceScheduler",
-    "AssemblyVersion": "0.1.27.0",
+    "AssemblyVersion": "0.1.28.0",
     "Description": "在 MissFisher 钓鱼等待间隙运行 ICE，并在下一目标窗口前恢复捕鱼。",
     "ApplicableVersion": "any",
     "RepoUrl": "https://github.com/Makuragami/MissFisherIceScheduler",
@@ -14,7 +14,7 @@
     "CanUnloadAsync": false,
     "Punchline": "协调 MissFisher 钓鱼间隙与 ICE 宇宙探索任务。",
     "AcceptsFeedback": true,
-    "ChangeLog": "# v0.1.27\n- 修复装备损坏后 Artisan 停止动作但合成界面残留，导致调度器无限等待的问题。\n- 即使关闭常规自动修理，装备耐久为 0% 时也会强制停止 ICE、退出失效合成并修理。\n- 启动 ICE 前增加 0% 耐久硬检查，避免 ICE/Artisan 进入无动作死锁。\n\n# v0.1.26\n- 职业达到等级上限后立即停止 ICE 派发，不再等待整个 ICE 任务结束。\n- 允许 Artisan 完成当前单件制作，随后停止并切换到下一个未满级职业。\n\n# v0.1.25\n- 修复正在合成时停止调度，Artisan 停在合成界面却不再执行技能的死锁。\n- 改为先停 ICE，让 Artisan 完成当前一件，再在合成间隙停止 Artisan。\n- 停止阶段以 100 毫秒间隔检查合成状态，避免漏掉停止窗口。\n\n# v0.1.24\n- 使用游戏实际合成信号识别 Artisan 内部残留忙碌状态。\n- 增加停止阶段的定期诊断日志。\n\n# v0.1.23\n- 启动 ICE 前自动检查并修理当前装备。\n\n# v0.1.22\n- 切换职业后穿上游戏推荐的最强装备，不保存或覆盖原套装。\n\n# v0.1.20\n- 停止 ICE 时同步停止 Artisan，双方稳定空闲后恢复 MissFisher。\n\n# v0.1.19\n- 增加生产/采集职业自动轮换、等级上限与职业排除。\n\n# v0.1.18\n- 支持四个宇宙探索区域与目的地界面自动交互。",
+    "ChangeLog": "# v0.1.28\n- 适配 MissFisher 2.4.2.1 的当前目标、分组、合集和恢复启动入口。\n- MissFisher 恢复入口失效时进入一次性故障状态，不再循环恢复并刷屏。\n\n# v0.1.27\n- 修复装备损坏后 Artisan 停止动作但合成界面残留，导致调度器无限等待的问题。\n- 即使关闭常规自动修理，装备耐久为 0% 时也会强制停止 ICE、退出失效合成并修理。\n\n# v0.1.26\n- 职业达到等级上限后立即停止 ICE 派发，完成当前单件制作后切换职业。",
     "DownloadLinkInstall": "https://raw.githubusercontent.com/Makuragami/MissFisherIceScheduler/refs/heads/main/latest.zip",
     "DownloadLinkUpdate": "https://raw.githubusercontent.com/Makuragami/MissFisherIceScheduler/refs/heads/main/latest.zip"
   }
