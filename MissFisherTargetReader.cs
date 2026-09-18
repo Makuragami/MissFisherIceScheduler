@@ -19,6 +19,7 @@ internal sealed class MissFisherTargetReader
         Version231,
         Version240,
         Version2421,
+        Version2422,
     }
 
     public string Status { get; private set; } = "尚未探测";
@@ -206,6 +207,7 @@ internal sealed class MissFisherTargetReader
         var modern = schema != ReflectionSchema.Version224;
         var stateTypeName = schema switch
         {
+            ReflectionSchema.Version2422 => "g.gb",
             ReflectionSchema.Version2421 => "g.gb",
             ReflectionSchema.Version240 => "g.gB",
             ReflectionSchema.Version231 => "G.GZ",
@@ -214,6 +216,7 @@ internal sealed class MissFisherTargetReader
         };
         var stateProviderName = schema switch
         {
+            ReflectionSchema.Version2422 => "G.Gy",
             ReflectionSchema.Version2421 => "G.Gy",
             ReflectionSchema.Version240 => "G.GY",
             ReflectionSchema.Version231 => "G.GW",
@@ -223,6 +226,7 @@ internal sealed class MissFisherTargetReader
         };
         var catalogProviderName = schema switch
         {
+            ReflectionSchema.Version2422 => "G.GP",
             ReflectionSchema.Version2421 => "G.GP",
             ReflectionSchema.Version240 => "G.Go",
             _ when modern => "G.GM",
@@ -274,6 +278,7 @@ internal sealed class MissFisherTargetReader
         var managerMethodName = schema == ReflectionSchema.Version224 ? "n" : "O";
         var idPropertyName = schema switch
         {
+            ReflectionSchema.Version2422 => "bEb",
             ReflectionSchema.Version2421 => "bEc",
             ReflectionSchema.Version240 => "bEa",
             ReflectionSchema.Version231 => "bDy",
@@ -283,6 +288,7 @@ internal sealed class MissFisherTargetReader
         };
         var namePropertyName = schema switch
         {
+            ReflectionSchema.Version2422 => "bEC",
             ReflectionSchema.Version2421 => "bED",
             ReflectionSchema.Version240 => "bEB",
             ReflectionSchema.Version231 => "bDZ",
@@ -328,7 +334,10 @@ internal sealed class MissFisherTargetReader
 
         var bridge240Type = assembly.GetType("E.EQ");
         var runner2421Field = bridge240Type?.GetField("yI", BindingFlags.Static | BindingFlags.NonPublic);
-        var modern2421 = runner2421Field?.FieldType.FullName == "i.is";
+        var runner242xType = runner2421Field?.FieldType;
+        var modern2422 = runner242xType?.FullName == "i.is"
+            && runner242xType.GetProperty("bfC", BindingFlags.Instance | BindingFlags.NonPublic) is not null;
+        var modern2421 = !modern2422 && runner242xType?.FullName == "i.is";
         var runner240Field = bridge240Type?.GetField("yi", BindingFlags.Static | BindingFlags.NonPublic);
         var modern240 = !modern2421 && runner240Field?.FieldType.FullName == "i.iS";
         var modernBridgeType = assembly.GetType("E.EP");
@@ -336,7 +345,9 @@ internal sealed class MissFisherTargetReader
         var modern231 = runnerField?.FieldType.Name == "iQ";
         var modern2302 = runnerField is not null && !modern231;
         var modern2301 = modernBridgeType?.GetField("yF", BindingFlags.Static | BindingFlags.NonPublic) is not null;
-        reflectionSchema = modern2421
+        reflectionSchema = modern2422
+            ? ReflectionSchema.Version2422
+            : modern2421
             ? ReflectionSchema.Version2421
             : modern240
             ? ReflectionSchema.Version240
@@ -347,9 +358,9 @@ internal sealed class MissFisherTargetReader
             : modern2301
                 ? ReflectionSchema.Version2301
                 : ReflectionSchema.Version224;
-        var modern = modern2421 || modern240 || modern231 || modern2302 || modern2301;
-        var bridgeType = modern2421 || modern240 ? bridge240Type : modern ? modernBridgeType : assembly.GetType("E.EL");
-        checklistRunnerField = modern2421
+        var modern = modern2422 || modern2421 || modern240 || modern231 || modern2302 || modern2301;
+        var bridgeType = modern2422 || modern2421 || modern240 ? bridge240Type : modern ? modernBridgeType : assembly.GetType("E.EL");
+        checklistRunnerField = modern2422 || modern2421
             ? runner2421Field
             : modern240
             ? runner240Field
@@ -358,7 +369,7 @@ internal sealed class MissFisherTargetReader
                 BindingFlags.Static | BindingFlags.NonPublic);
         var runnerType = checklistRunnerField?.FieldType;
         currentTargetProperty = runnerType?.GetProperty(
-            modern2421 ? "bfD" : modern240 ? "bfB" : modern231 ? "beZ" : modern2302 ? "bet" : modern2301 ? "beM" : "bCp",
+            modern2422 ? "bfC" : modern2421 ? "bfD" : modern240 ? "bfB" : modern231 ? "beZ" : modern2302 ? "bet" : modern2301 ? "beM" : "bCp",
             BindingFlags.Instance | BindingFlags.NonPublic);
         var targetType = currentTargetProperty?.PropertyType;
         timingMethod = targetType?.GetMethod(

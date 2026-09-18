@@ -3,7 +3,7 @@
     "Author": "makuragami",
     "Name": "MissFisher ICE Scheduler",
     "InternalName": "MissFisherIceScheduler",
-    "AssemblyVersion": "0.1.28.0",
+    "AssemblyVersion": "0.1.29.0",
     "Description": "在 MissFisher 钓鱼等待间隙运行 ICE，并在下一目标窗口前恢复捕鱼。",
     "ApplicableVersion": "any",
     "RepoUrl": "https://github.com/Makuragami/MissFisherIceScheduler",
@@ -14,7 +14,7 @@
     "CanUnloadAsync": false,
     "Punchline": "协调 MissFisher 钓鱼间隙与 ICE 宇宙探索任务。",
     "AcceptsFeedback": true,
-    "ChangeLog": "# v0.1.28\n- 适配 MissFisher 2.4.2.1 的当前目标、分组、合集和恢复启动入口。\n- MissFisher 恢复入口失效时进入一次性故障状态，不再循环恢复并刷屏。\n\n# v0.1.27\n- 修复装备损坏后 Artisan 停止动作但合成界面残留，导致调度器无限等待的问题。\n- 即使关闭常规自动修理，装备耐久为 0% 时也会强制停止 ICE、退出失效合成并修理。\n\n# v0.1.26\n- 职业达到等级上限后立即停止 ICE 派发，完成当前单件制作后切换职业。",
+    "ChangeLog": "# v0.1.29\n- 适配 MissFisher 2.4.2.2 的当前目标、分组、合集和恢复启动入口。\n- 修复完整测试提示没有兼容的恢复目标启动入口。\n\n# v0.1.28\n- 适配 MissFisher 2.4.2.1 的当前目标、分组、合集和恢复启动入口。\n- MissFisher 恢复入口失效时进入一次性故障状态，不再循环恢复并刷屏。\n\n# v0.1.27\n- 修复装备损坏后 Artisan 停止动作但合成界面残留，导致调度器无限等待的问题。\n- 即使关闭常规自动修理，装备耐久为 0% 时也会强制停止 ICE、退出失效合成并修理。\n\n# v0.1.26\n- 职业达到等级上限后立即停止 ICE 派发，完成当前单件制作后切换职业。",
     "DownloadLinkInstall": "https://raw.githubusercontent.com/Makuragami/MissFisherIceScheduler/refs/heads/main/latest.zip",
     "DownloadLinkUpdate": "https://raw.githubusercontent.com/Makuragami/MissFisherIceScheduler/refs/heads/main/latest.zip"
   }
