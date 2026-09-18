@@ -705,16 +705,19 @@ public sealed class Plugin : IDalamudPlugin
         var preparingToCraft = condition[ConditionFlag.PreparingToCraft];
         if (executingCraftAction || preparingToCraft)
             lastCraftActivityUtc = now;
+        var staleSynthesisWindow = synthesisVisible && !craftingFlag
+            && !executingCraftAction && !preparingToCraft
+            && now - lastCraftActivityUtc >= TimeSpan.FromSeconds(5);
         var stalledBrokenSynthesis = brokenGearRecovery && synthesisVisible && craftingFlag
             && !executingCraftAction && !preparingToCraft
             && now - lastCraftActivityUtc >= TimeSpan.FromSeconds(20);
-        if (stalledBrokenSynthesis && now >= nextStalledSynthesisCloseUtc)
+        if ((stalledBrokenSynthesis || staleSynthesisWindow) && now >= nextStalledSynthesisCloseUtc)
         {
             TryCloseStalledSynthesis();
             nextStalledSynthesisCloseUtc = now.AddSeconds(2);
         }
         var activeSynthesis = !stalledBrokenSynthesis
-            && (synthesisVisible || executingCraftAction || preparingToCraft);
+            && (executingCraftAction || preparingToCraft || (synthesisVisible && craftingFlag));
 
         var iceKnown = ipc.TryGetIce(out var ice);
         var artisanKnown = ipc.TryGetArtisan(out var artisan);
@@ -799,10 +802,11 @@ public sealed class Plugin : IDalamudPlugin
                 "ICE stop check: elapsed={Elapsed:F1}s, iceKnown={IceKnown}, iceRunning={IceRunning}, iceState={IceState}, " +
                 "artisanKnown={ArtisanKnown}, artisanBusy={ArtisanBusy}, stopRequested={StopRequested}, " +
                 "synthesisVisible={SynthesisVisible}, craftingFlag={CraftingFlag}, executing={Executing}, " +
-                "preparing={Preparing}, noActiveSynthesis={Inactive:F1}s, staleBusy={StaleBusy}",
+                "preparing={Preparing}, staleWindow={StaleWindow}, noActiveSynthesis={Inactive:F1}s, staleBusy={StaleBusy}",
                 Elapsed(now).TotalSeconds, iceKnown, iceKnown && ice.IsRunning, iceKnown ? ice.State : "IPC unavailable",
                 artisanKnown, artisanKnown && artisan.IsBusy, artisanKnown && artisan.StopRequested,
-                synthesisVisible, craftingFlag, executingCraftAction, preparingToCraft, inactiveSeconds, staleArtisanBusy);
+                synthesisVisible, craftingFlag, executingCraftAction, preparingToCraft, staleSynthesisWindow,
+                inactiveSeconds, staleArtisanBusy);
             nextStopDiagnosticUtc = now.AddSeconds(10);
         }
         if (iceStopped && artisanStopped)
@@ -846,7 +850,8 @@ public sealed class Plugin : IDalamudPlugin
 
         stopConfirmedSinceUtc = null;
         var craftEvidence = stalledBrokenSynthesis ? "损坏装备导致的失效合成"
-            : synthesisVisible ? "合成界面可见"
+            : staleSynthesisWindow ? "仅残留合成界面"
+            : synthesisVisible && craftingFlag ? "合成界面可见且处于制作状态"
             : executingCraftAction ? "正在执行制作技能"
             : preparingToCraft ? "正在准备制作"
             : craftingFlag ? "仅游戏制作状态残留"
